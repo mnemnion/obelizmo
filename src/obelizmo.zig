@@ -62,7 +62,7 @@ pub fn StringMarker(Kind: type) type {
             string: []const u8,
             cap: usize,
         ) error{OutOfMemory}!SMark {
-            const m_queue = MarkQueue.init(allocator, {});
+            var m_queue = MarkQueue.init(allocator, {});
             try m_queue.ensureTotalCapacity(cap);
             return SMark{
                 .string = string,
@@ -165,14 +165,17 @@ pub fn StringMarker(Kind: type) type {
         pub fn writeAsStream(
             marker: *const SMark,
             writer: anytype,
-            markups: *const MarkupArray,
+            markups: MarkupArray,
         ) !void {
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
             const string = marker.string;
-            const in_q = marker.queue;
-            const out_q = SweepQueue.init(allocator, {});
+            var in_q = marker.queue;
+            var out_q = SweepQueue.init(allocator, {});
+            defer out_q.deinit();
+            // Some rounds of the while loop will skip a mark, so we pop the queue
+            // manually:
             var this_mark = in_q.removeOrNull();
             var cursor: usize = 0;
             marking: while (this_mark) |mark| {
@@ -184,16 +187,26 @@ pub fn StringMarker(Kind: type) type {
                         if (next_mark_end < mark.offset) {
                             from_this_mark = false;
                             break :idx next_mark_end;
-                        } else break :idx mark.offset;
+                        } else {
+                            break :idx mark.offset;
+                        }
                     } else {
                         break :idx mark.offset;
                     }
                 };
+                // Write up to our next obelus
                 if (cursor < next_idx) {
                     try writer.writeAll(string[cursor..next_idx]);
                 }
                 cursor = next_idx;
                 if (from_this_mark) {
+                    // First we need to close the out mark, if there is one
+                    if (maybe_next) |next| {
+                        if (next.final() > mark.offset) {
+                            const right = markups.get(next.kind)[RIGHT];
+                            try writer.writeAll(right);
+                        }
+                    }
                     // Write our bookend.
                     const left = markups.get(mark.kind)[LEFT];
                     try writer.writeAll(left);
@@ -270,6 +283,10 @@ pub fn StringMarker(Kind: type) type {
                 return Order.lt;
             } else if (l_final > r_final) {
                 return Order.gt;
+            } else if (left.len < right.len) {
+                return Order.lt;
+            } else if (left.len > right.len) {
+                return Order.gt;
             } else if (@intFromEnum(left.kind) < @intFromEnum(right.kind)) {
                 return Order.gt;
             } else if (@intFromEnum(left.kind) > @intFromEnum(right.kind)) {
@@ -283,6 +300,8 @@ pub fn StringMarker(Kind: type) type {
 
 const testing = std.testing;
 const expectEqualSlices = testing.expectEqualSlices;
+const expect = testing.expect;
+const expectEqual = testing.expectEqual;
 const OhSnap = @import("ohsnap");
 
 test "StringMarker" {
@@ -325,4 +344,83 @@ test "StringMarker" {
         \\  enums.EnumArray(obelizmo.test.StringMarker.e_num,[2][]const u8)
         ,
     ).expectEqual(SM.MarkupArray);
+}
+
+const Colors = enum {
+    red,
+    blue,
+    green,
+    yellow,
+    teal,
+    // etc
+};
+
+test "StringMarker.writeAsStream" {
+    const oh = OhSnap{};
+    const allocator = testing.allocator;
+    const ColorMarker = StringMarker(Colors);
+    const ColorArray = ColorMarker.MarkupArray;
+    const color_markup = ColorArray.init(
+        .{
+            .red = .{ "<r>", "</r>" },
+            .blue = .{ "<b>", "</b>" },
+            .green = .{ "<g>", "</g>" },
+            .yellow = .{ "<y>", "</y>" },
+            .teal = .{ "<t>", "</t>" },
+        },
+    );
+    var color_marker = try ColorMarker.initCapacity(allocator, "red blue green yellow", 4);
+    defer color_marker.deinit();
+    try expect(try color_marker.findAndMark(.red, "red"));
+    try expect(try color_marker.findAndMark(.yellow, "yellow"));
+    try expect(try color_marker.findAndMark(.green, "green"));
+    try expect(try color_marker.findAndMark(.blue, "blue"));
+    try color_marker.markSlice(.teal, 4, 14);
+    try oh.snap(
+        @src(),
+        \\[]obelizmo.StringMarker.Mark
+        \\  [0]: obelizmo.StringMarker.Mark
+        \\    .kind: obelizmo.Colors
+        \\      .red
+        \\    .offset: u32 = 0
+        \\    .len: u32 = 3
+        \\  [1]: obelizmo.StringMarker.Mark
+        \\    .kind: obelizmo.Colors
+        \\      .teal
+        \\    .offset: u32 = 4
+        \\    .len: u32 = 10
+        \\  [2]: obelizmo.StringMarker.Mark
+        \\    .kind: obelizmo.Colors
+        \\      .green
+        \\    .offset: u32 = 9
+        \\    .len: u32 = 5
+        \\  [3]: obelizmo.StringMarker.Mark
+        \\    .kind: obelizmo.Colors
+        \\      .yellow
+        \\    .offset: u32 = 15
+        \\    .len: u32 = 6
+        \\  [4]: obelizmo.StringMarker.Mark
+        \\    .kind: obelizmo.Colors
+        \\      .blue
+        \\    .offset: u32 = 4
+        \\    .len: u32 = 4
+        ,
+    ).expectEqual(color_marker.queue.items);
+    try expectEqual(
+        color_marker.queue.items[1].final(),
+        color_marker.queue.items[2].final(),
+    );
+    var out_array = std.ArrayList(u8).init(allocator);
+    defer out_array.deinit();
+    var writer = out_array.writer();
+    try color_marker.writeAsStream(&writer, color_markup);
+    const out_string = try out_array.toOwnedSlice();
+    defer allocator.free(out_string);
+    std.debug.print("{s}\n", .{out_string});
+    try oh.snap(
+        @src(),
+        \\[]u8
+        \\  "<r>red</r> <t></t><b>blue</b><t> </t><g>green</g></t> <y>yellow</y>"
+        ,
+    ).expectEqual(out_string);
 }
