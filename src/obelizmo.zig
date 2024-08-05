@@ -157,16 +157,35 @@ pub fn StringMarker(Kind: type) type {
             } else return false;
         }
 
-        /// Write out the marked string as a stream: this is designed to
-        /// work with protocols like ANSI terminal sequences, where the
-        /// style signaling is in-band, and has to be repeated in order
-        /// for nested colors to function correctly.  If emitting a tree-
-        /// shaped markup syntax, such as XML or HTML, use `writeAsTree`.
+        pub const StreamOption = enum {
+            skip_on_zero_width,
+            include_zero_width,
+        };
+
         pub fn writeAsStream(
             marker: *const SMark,
             writer: anytype,
             markups: MarkupArray,
         ) !void {
+            return marker.writeAsStreamWithOption(
+                writer,
+                markups,
+                .skip_on_zero_width,
+            );
+        }
+
+        /// Write out the marked string as a stream: this is designed to
+        /// work with protocols like ANSI terminal sequences, where the
+        /// style signaling is in-band, and has to be repeated in order
+        /// for nested colors to function correctly.  If emitting a tree-
+        /// shaped markup syntax, such as XML or HTML, use `writeAsTree`.
+        pub fn writeAsStreamWithOption(
+            marker: *const SMark,
+            writer: anytype,
+            markups: MarkupArray,
+            option: StreamOption,
+        ) !void {
+            const no_zero = option == .skip_on_zero_width;
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
@@ -203,11 +222,25 @@ pub fn StringMarker(Kind: type) type {
                     // First we need to close the out mark, if there is one
                     if (maybe_next) |next| {
                         if (next.final() > mark.offset) {
-                            const right = markups.get(next.kind)[RIGHT];
-                            try writer.writeAll(right);
+                            if (!no_zero or (no_zero and next.offset < cursor)) {
+                                const right = markups.get(next.kind)[RIGHT];
+                                try writer.writeAll(right);
+                            }
                         }
                     }
                     // Write our bookend.
+                    // We might have a zero-width to skip though:
+                    if (no_zero) {
+                        const maybe_next_next = in_q.peek();
+                        if (maybe_next_next) |next| {
+                            if (next.offset == mark.offset) {
+                                // Push the mark, but don't write it
+                                try out_q.add(mark);
+                                this_mark = in_q.remove();
+                                continue :marking;
+                            }
+                        }
+                    }
                     const left = markups.get(mark.kind)[LEFT];
                     try writer.writeAll(left);
                     // Enplace on the out queue.
@@ -223,8 +256,12 @@ pub fn StringMarker(Kind: type) type {
                     // Now stream the left mark from the next on-queue, if any.
                     const maybe_left_mark = out_q.peek();
                     if (maybe_left_mark) |left_mark| {
-                        const left = markups.get(left_mark.kind)[LEFT];
-                        try writer.writeAll(left);
+                        if (no_zero and left_mark.final() == cursor) {
+                            _ = out_q.remove();
+                        } else {
+                            const left = markups.get(left_mark.kind)[LEFT];
+                            try writer.writeAll(left);
+                        }
                     }
                     continue :marking;
                 }
@@ -420,7 +457,7 @@ test "StringMarker.writeAsStream" {
     try oh.snap(
         @src(),
         \\[]u8
-        \\  "<r>red</r> <t></t><b>blue</b><t> </t><g>green</g></t> <y>yellow</y>"
+        \\  "<r>red</r> <b>blue</b><t> </t><g>green</g> <y>yellow</y>"
         ,
     ).expectEqual(out_string);
 }

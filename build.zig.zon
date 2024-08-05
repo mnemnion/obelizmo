@@ -2,19 +2,19 @@
     .name = "obelizmo",
 
     // This is a [Semantic Version](https://semver.org/).
-    .version = "0.0.0",
+    .version = "0.0.1",
 
     .dependencies = .{
         .ohsnap = .{
-            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.2.0.tar.gz",
-            .hash = "12203b6caabf10f0725ef5b6b4761ca29c4a385bb47f45be0a009cd27ad6c8c0354c",
+            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.2.1.tar.gz",
+            .hash = "1220cb19f183fa2753097e6fc271b73e328598b7aa1138f8a73d4db9daa865e3d128",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        //"LICENSE",
+        "LICENSE",
         "README.md",
     },
 }
