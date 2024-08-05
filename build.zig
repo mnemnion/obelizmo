@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
-    // Export as module to be available for @import("mvzr") on user site
+    // Export as module to be available for @import("obelizmo") on user site
     _ = b.addModule("obelizmo", .{
         .root_source_file = b.path("src/obelizmo.zig"),
         .target = target,
@@ -24,6 +24,13 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+
+    if (b.lazyDependency("ohsnap", .{
+        .target = target,
+        .optimize = optimize,
+    })) |ohsnap_dep| {
+        lib_unit_tests.root_module.addImport("ohsnap", ohsnap_dep.module("ohsnap"));
+    }
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
