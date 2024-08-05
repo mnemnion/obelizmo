@@ -4,10 +4,10 @@ const Allocator = std.mem.Allocator;
 const PriorityQueue = std.PriorityQueue;
 const Order = std.math.Order;
 
-pub fn StringMarker(Kind: type) type {
+pub fn MarkedString(Kind: type) type {
     switch (@typeInfo(Kind)) {
         .Enum => {},
-        else => @compileError("StringMarker must be given an enum"),
+        else => @compileError("MarkedString must be given an enum"),
     }
 
     const Mark = struct {
@@ -36,16 +36,16 @@ pub fn StringMarker(Kind: type) type {
         /// Queue for writing Marks.
         const SweepQueue = PriorityQueue(Mark, void, compareEnds);
 
-        /// The EnumArray type expected by StringMarker printing functions.
+        /// The EnumArray type expected by MarkedString printing functions.
         /// Initialized with a value of `[2][]const u8`, representing a pair of
         /// bookends for printing the marked string.  For information in setting
         /// up and using this type, see `std.enums.EnumArray`.
         pub const MarkupArray = std.enums.EnumArray(Kind, [2][]const u8);
 
-        /// Initialize a StringMarker.  The string is not considered to be
-        /// owned by the StringMarker, as such, the caller is responsible
+        /// Initialize a MarkedString.  The string is not considered to be
+        /// owned by the MarkedString, as such, the caller is responsible
         /// for its memory.  Call `marker.deinit()` to free the memory of
-        /// the `StringMarker`.
+        /// the `MarkedString`.
         pub fn init(allocator: Allocator, string: []const u8) SMark {
             return SMark{
                 .string = string,
@@ -53,10 +53,10 @@ pub fn StringMarker(Kind: type) type {
             };
         }
 
-        /// Initialize a StringMarker with a given capacity.  The string
-        /// itself is not owned by the StringMarker, and the caller is
+        /// Initialize a MarkedString with a given capacity.  The string
+        /// itself is not owned by the MarkedString, and the caller is
         /// responsible for managing it.  Call `marker.deinit()` to free
-        /// the StringMarker.
+        /// the MarkedString.
         pub fn initCapacity(
             allocator: Allocator,
             string: []const u8,
@@ -70,7 +70,7 @@ pub fn StringMarker(Kind: type) type {
             };
         }
 
-        /// Free memory allocated by the StringMarker.  The string is
+        /// Free memory allocated by the MarkedString.  The string is
         /// not considered to be owned by the marker, and will not be
         /// deinitialized: this allows for, among other things, marks
         /// to be applied to an .rodata constant string.
@@ -341,7 +341,7 @@ const expect = testing.expect;
 const expectEqual = testing.expectEqual;
 const OhSnap = @import("ohsnap");
 
-test "StringMarker" {
+test "MarkedString" {
     const allocator = std.testing.allocator;
     const oh = OhSnap{};
     const e_num = enum {
@@ -349,7 +349,7 @@ test "StringMarker" {
         dee,
         dah,
     };
-    const SM = StringMarker(e_num);
+    const SM = MarkedString(e_num);
     var markup = SM.init(allocator, "blue green red");
     defer markup.deinit();
     try markup.markSlice(.la, 0, 4);
@@ -357,19 +357,19 @@ test "StringMarker" {
     try markup.markSlice(.dah, 11, 14);
     try oh.snap(
         @src(),
-        \\[]obelizmo.StringMarker.Mark
-        \\  [0]: obelizmo.StringMarker.Mark
-        \\    .kind: obelizmo.test.StringMarker.e_num
+        \\[]obelizmo.MarkedString.Mark
+        \\  [0]: obelizmo.MarkedString.Mark
+        \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .dee
         \\    .offset: u32 = 0
         \\    .len: u32 = 11
-        \\  [1]: obelizmo.StringMarker.Mark
-        \\    .kind: obelizmo.test.StringMarker.e_num
+        \\  [1]: obelizmo.MarkedString.Mark
+        \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .la
         \\    .offset: u32 = 0
         \\    .len: u32 = 4
-        \\  [2]: obelizmo.StringMarker.Mark
-        \\    .kind: obelizmo.test.StringMarker.e_num
+        \\  [2]: obelizmo.MarkedString.Mark
+        \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .dah
         \\    .offset: u32 = 11
         \\    .len: u32 = 3
@@ -378,7 +378,7 @@ test "StringMarker" {
     try oh.snap(
         @src(),
         \\type
-        \\  enums.EnumArray(obelizmo.test.StringMarker.e_num,[2][]const u8)
+        \\  enums.EnumArray(obelizmo.test.MarkedString.e_num,[2][]const u8)
         ,
     ).expectEqual(SM.MarkupArray);
 }
@@ -392,10 +392,10 @@ const Colors = enum {
     // etc
 };
 
-test "StringMarker.writeAsStream" {
+test "MarkedString.writeAsStream" {
     const oh = OhSnap{};
     const allocator = testing.allocator;
-    const ColorMarker = StringMarker(Colors);
+    const ColorMarker = MarkedString(Colors);
     const ColorArray = ColorMarker.MarkupArray;
     const color_markup = ColorArray.init(
         .{
@@ -415,28 +415,28 @@ test "StringMarker.writeAsStream" {
     try color_marker.markSlice(.teal, 4, 14);
     try oh.snap(
         @src(),
-        \\[]obelizmo.StringMarker.Mark
-        \\  [0]: obelizmo.StringMarker.Mark
+        \\[]obelizmo.MarkedString.Mark
+        \\  [0]: obelizmo.MarkedString.Mark
         \\    .kind: obelizmo.Colors
         \\      .red
         \\    .offset: u32 = 0
         \\    .len: u32 = 3
-        \\  [1]: obelizmo.StringMarker.Mark
+        \\  [1]: obelizmo.MarkedString.Mark
         \\    .kind: obelizmo.Colors
         \\      .teal
         \\    .offset: u32 = 4
         \\    .len: u32 = 10
-        \\  [2]: obelizmo.StringMarker.Mark
+        \\  [2]: obelizmo.MarkedString.Mark
         \\    .kind: obelizmo.Colors
         \\      .green
         \\    .offset: u32 = 9
         \\    .len: u32 = 5
-        \\  [3]: obelizmo.StringMarker.Mark
+        \\  [3]: obelizmo.MarkedString.Mark
         \\    .kind: obelizmo.Colors
         \\      .yellow
         \\    .offset: u32 = 15
         \\    .len: u32 = 6
-        \\  [4]: obelizmo.StringMarker.Mark
+        \\  [4]: obelizmo.MarkedString.Mark
         \\    .kind: obelizmo.Colors
         \\      .blue
         \\    .offset: u32 = 4
