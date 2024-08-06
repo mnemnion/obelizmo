@@ -174,6 +174,17 @@ pub fn MarkedString(Kind: type) type {
             );
         }
 
+        fn cloneQueue(queue: MarkQueue) !MarkQueue {
+            const nu_q_slice = try queue.allocator.alloc(Mark, queue.items.len);
+            @memcpy(nu_q_slice, queue.items);
+            return MarkQueue{
+                .allocator = queue.allocator,
+                .items = nu_q_slice,
+                .cap = nu_q_slice.len,
+                .context = {},
+            };
+        }
+
         /// Write out the marked string as a stream: this is designed to
         /// work with protocols like ANSI terminal sequences, where the
         /// style signaling is in-band, and has to be repeated in order
@@ -190,7 +201,8 @@ pub fn MarkedString(Kind: type) type {
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
             const string = marker.string;
-            var in_q = marker.queue;
+            var in_q = try cloneQueue(marker.queue);
+            defer in_q.deinit();
             var out_q = SweepQueue.init(allocator, {});
             defer out_q.deinit();
             // Some rounds of the while loop will skip a mark, so we pop the queue
@@ -278,6 +290,81 @@ pub fn MarkedString(Kind: type) type {
                     const left = markups.get(left_mark.kind)[LEFT];
                     try writer.writeAll(left);
                 }
+            }
+            // Write the rest of the string, if any
+            try writer.writeAll(string[cursor..]);
+
+            return;
+        }
+
+        /// Write the `MarkedString` as a tree.  This is more compatible
+        /// with XML/HTML style markup, where each marked region is a
+        /// span or such.  Every mark is begun and ended once, with no
+        /// logic to restart an outer span once an inner span is closed,
+        /// as is necessary to get good results printing to a terminal.
+        pub fn writeAsTree(
+            marker: *const SMark,
+            writer: anytype,
+            markups: MarkupArray,
+        ) !void {
+            // We use a second queue with a different comparison function, such
+            // that the front of the queue is always the next-outermost Mark.
+            const allocator = marker.queue.allocator;
+            const string = marker.string;
+            var in_q = try cloneQueue(marker.queue);
+            defer in_q.deinit();
+            var out_q = SweepQueue.init(allocator, {});
+            defer out_q.deinit();
+            // Some rounds of the while loop will skip a mark, so we pop the queue
+            // manually:
+            var this_mark = in_q.removeOrNull();
+            var cursor: usize = 0;
+            marking: while (this_mark) |mark| {
+                const maybe_next = out_q.peek();
+                var from_this_mark = true; // determines where we get our offset
+                const next_idx = idx: {
+                    if (maybe_next) |next_mark| {
+                        const next_mark_end = next_mark.final();
+                        if (next_mark_end < mark.offset) {
+                            from_this_mark = false;
+                            break :idx next_mark_end;
+                        } else {
+                            break :idx mark.offset;
+                        }
+                    } else {
+                        break :idx mark.offset;
+                    }
+                };
+                // Write up to our next obelus
+                if (cursor < next_idx) {
+                    try writer.writeAll(string[cursor..next_idx]);
+                }
+                cursor = next_idx;
+                if (from_this_mark) {
+                    // Write our bookend.
+                    const left = markups.get(mark.kind)[LEFT];
+                    try writer.writeAll(left);
+                    // Enplace on the out queue.
+                    try out_q.add(mark);
+                    // Replace mark.
+                    this_mark = in_q.removeOrNull();
+                    continue :marking;
+                } else {
+                    // This mark isn't up yet, write the end off the queue.
+                    const end_mark = out_q.remove();
+                    const right = markups.get(end_mark.kind)[RIGHT];
+                    try writer.writeAll(right);
+                    // Now stream the left mark from the next on-queue, if any.
+                    continue :marking;
+                }
+            } // end :marking
+            // There may still be marks on the out queue to drain
+            while (out_q.removeOrNull()) |out_mark| {
+                const slice_end = out_mark.final();
+                try writer.writeAll(string[cursor..slice_end]);
+                cursor = slice_end;
+                const right = markups.get(out_mark.kind)[RIGHT];
+                try writer.writeAll(right);
             }
             // Write the rest of the string, if any
             try writer.writeAll(string[cursor..]);
@@ -392,7 +479,7 @@ const Colors = enum {
     // etc
 };
 
-test "MarkedString.writeAsStream" {
+test "MarkedString writeAsStream writeAsTree" {
     const oh = OhSnap{};
     const allocator = testing.allocator;
     const ColorMarker = MarkedString(Colors);
@@ -449,15 +536,23 @@ test "MarkedString.writeAsStream" {
     );
     var out_array = std.ArrayList(u8).init(allocator);
     defer out_array.deinit();
-    var writer = out_array.writer();
-    try color_marker.writeAsStream(&writer, color_markup);
-    const out_string = try out_array.toOwnedSlice();
-    defer allocator.free(out_string);
-    std.debug.print("{s}\n", .{out_string});
+    var stream_writer = out_array.writer();
+    try color_marker.writeAsStream(&stream_writer, color_markup);
+    const stream_string = try out_array.toOwnedSlice();
+    defer allocator.free(stream_string);
     try oh.snap(
         @src(),
         \\[]u8
         \\  "<r>red</r> <b>blue</b><t> </t><g>green</g> <y>yellow</y>"
         ,
-    ).expectEqual(out_string);
+    ).expectEqual(stream_string);
+    try color_marker.writeAsTree(&stream_writer, color_markup);
+    const tree_string = try out_array.toOwnedSlice();
+    defer allocator.free(tree_string);
+    try oh.snap(
+        @src(),
+        \\[]u8
+        \\  "<r>red</r> <t><b>blue</b> <g>green</g></t> <y>yellow</y>"
+        ,
+    ).expectEqual(tree_string);
 }
