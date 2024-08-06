@@ -6,8 +6,8 @@
 
     .dependencies = .{
         .ohsnap = .{
-            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.2.1.tar.gz",
-            .hash = "1220cb19f183fa2753097e6fc271b73e328598b7aa1138f8a73d4db9daa865e3d128",
+            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.3.0.tar.gz",
+            .hash = "1220ea69b8a88b2f46a35fef6349dacf07a8b299fe97aac8ce7e1a061b85251fea4b",
         },
     },
     .paths = .{
