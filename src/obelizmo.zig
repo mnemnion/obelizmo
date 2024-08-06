@@ -431,6 +431,250 @@ pub fn MarkedString(Kind: type) type {
             return;
         }
 
+        /// Define a type for a given generic Writer, which is
+        /// initialized with `WriteIterator.init(marker: *MarkedString,
+        /// writer: WriterType, markups: MarkupArray, limit: usize)`.
+        /// Repeated calls to `iterator.writeStream()`, or alternately,
+        /// `iterator.writeTree()`, will write `limit` bytes or less,
+        /// returning the amount written, and return `null` when there
+        /// is no more string left to write.  This iterator allocates
+        /// memory internally, use `write_iterator.deinit()` to free
+        /// after use.
+        ///
+        /// ## Usage Note
+        ///
+        /// The limit provided must be larger than any of the decoraters
+        /// in the `MarkupArray`, or the write will be unable to process,
+        /// because we never perform a partial write of those strings. If
+        /// this happens, the iterator will return 0, having written no
+        /// bytes.  The best thing is to simply not put yourself in that
+        /// situation, but if, for instance, all marks are dynamic, you
+        /// can at least detect the condition that way, and decide what
+        /// to do other than infinitely loop.
+        pub fn WriteIterator(WriterType: type) type {
+            return struct {
+                marker: *const SMark,
+                writer: WriterType,
+                markups: MarkupArray,
+                in_q: MarkQueue,
+                out_q: SweepQueue,
+                limit: usize,
+                cursor: usize = 0,
+                options: StreamOption,
+
+                const StreamWrite = @This();
+
+                pub fn initOptions(
+                    marker: *const SMark,
+                    writer: WriterType,
+                    markups: MarkupArray,
+                    limit: usize,
+                    options: StreamOption,
+                ) StreamWrite {
+                    return StreamWrite{
+                        .marker = marker,
+                        .writer = writer,
+                        .in_q = cloneQueue(marker.queue),
+                        .out_q = SweepQueue.init(marker.queue.allocator, {}),
+                        .markups = markups,
+                        .limit = limit,
+                        .options = options,
+                    };
+                }
+
+                pub fn init(
+                    marker: *const SMark,
+                    writer: WriterType,
+                    markups: MarkupArray,
+                    limit: usize,
+                ) StreamWrite {
+                    return StreamWrite.initOptions(
+                        marker,
+                        writer,
+                        markups,
+                        limit,
+                        .skip_on_zero_width,
+                    );
+                }
+
+                /// Free the iterator's allocated memory.
+                pub fn deinit(iter: *WriteIterator) void {
+                    iter.in_q.deinit();
+                    iter.out_q.deinit();
+                }
+
+                pub fn writeStream(iter: *WriteIterator) !?usize {
+                    if (iter.cursor >= iter.marker.string.len) return null;
+                    const string = iter.marker.string;
+                    var in_q = &iter.in_q;
+                    const markups = &iter.markups;
+                    var out_q = &iter.out_q;
+                    var writer = &iter.writer;
+                    // We always pull a fresh Mark. Even if it takes
+                    // several tail calls to clear the out marks, or to
+                    // write the final bit of the tail, this is safe,
+                    // we just put it back when we can't write it.
+                    var this_mark = in_q.removeOrNull();
+                    const no_zero = iter.options == .skip_on_zero_width;
+                    var count: usize = 0;
+                    marking: while (this_mark) |mark| {
+                        const maybe_next = out_q.peek();
+                        var from_this_mark = true; // determines where we get our offset
+                        const next_idx = idx: {
+                            if (maybe_next) |next_mark| {
+                                const next_mark_end = next_mark.final();
+                                if (next_mark_end < mark.offset) {
+                                    from_this_mark = false;
+                                    break :idx next_mark_end;
+                                } else {
+                                    break :idx mark.offset;
+                                }
+                            } else {
+                                break :idx mark.offset;
+                            }
+                        };
+                        // Write up to our next obelus.
+                        if (iter.cursor < next_idx) {
+                            // Count is zero here.
+                            assert(count == 0);
+                            if (next_idx - iter.cursor < iter.limit) {
+                                count += try writer.write(string[iter.cursor..next_idx]);
+                            } else {
+                                const this_limit = (next_idx - iter.cursor) - iter.limit;
+                                count += try writer.write(string[iter.cursor..this_limit]);
+                                assert(count == iter.limit);
+                                iter.cursor += this_limit;
+                                // Replace the unused mark on the queue.
+                                in_q.add(this_mark);
+                                return count;
+                            }
+                            iter.cursor = next_idx;
+                        } else {
+                            // Invalid for the index to be behind the cursor.
+                            assert(iter.cursor == next_idx);
+                        }
+                        if (from_this_mark) {
+                            // First we need to close the out mark, if there is one.
+                            if (maybe_next) |next| {
+                                if (next.final() >= mark.offset) {
+                                    if (!no_zero or (no_zero and next.offset < iter.cursor)) {
+                                        const right = markups.get(next.kind)[RIGHT];
+                                        if (count + right.len > iter.limit) {
+                                            return count;
+                                        } else {
+                                            count += try writer.write(right);
+                                        }
+                                    }
+                                }
+                            }
+                            // Write our bookend.
+                            // We might have a zero-width to skip though:
+                            if (no_zero) {
+                                const maybe_next_next = in_q.peek();
+                                if (maybe_next_next) |next| {
+                                    // No need to open a sequence if we're just
+                                    // going to replace it next:
+                                    if (next.offset == mark.offset) {
+                                        // Push the mark, but don't write it.
+                                        try out_q.add(mark);
+                                        this_mark = in_q.remove();
+                                        continue :marking;
+                                    }
+                                }
+                            }
+                            const left = markups.get(mark.kind)[LEFT];
+                            if (count + left.len <= iter.limit) {
+                                count += try writer.write(left);
+                            } else {
+                                // Replace the mark for next time.
+                                in_q.add(mark);
+                                return count;
+                            }
+                            // Enplace on the out queue.
+                            try out_q.add(mark);
+                            // Pull the next mark.
+                            this_mark = in_q.removeOrNull();
+                            continue :marking;
+                        } else {
+                            // This mark isn't up yet, write the end off the queue.
+                            const end_mark = out_q.peek();
+                            const right = markups.get(end_mark.kind)[RIGHT];
+                            if (count + right.len <= iter.limit) {
+                                count += try writer.write(right);
+                                _ = out_q.remove();
+                            } else {
+                                // It'll be waiting for us next time.
+                                return count;
+                            }
+                            // Now stream the left mark from the next on-queue, if any.
+                            const maybe_left_mark = out_q.peek();
+                            if (maybe_left_mark) |left_mark| {
+                                if (no_zero and left_mark.final() == iter.cursor) {
+                                    _ = out_q.remove();
+                                } else {
+                                    const left = markups.get(left_mark.kind)[LEFT];
+                                    if (count + left.len <= iter.limit) {
+                                        count += try writer.write(left);
+                                    } else {
+                                        // TODO this one might leave us in a bad state
+                                        // actually.  A conditional flag may be
+                                        // needed.
+                                        return count;
+                                    }
+                                }
+                            }
+                            continue :marking;
+                        }
+                    } // end :marking
+                    // There may still be marks on the out queue to drain.
+                    while (out_q.removeOrNull()) |out_mark| {
+                        const slice_end = out_mark.final();
+                        if (count + (slice_end - iter.cursor) <= iter.limit) {
+                            count += try writer.write(string[iter.cursor..slice_end]);
+                        } else {
+                            // Put it back.
+                            out_q.add(out_mark);
+                            return count;
+                        }
+                        iter.cursor = slice_end;
+                        const right = markups.get(out_mark.kind)[RIGHT];
+                        if (count + right.len <= iter.limit) {
+                            count += try writer.write(right);
+                        } else {
+                            // Put it back...
+                            out_q.add(out_mark);
+                            return count;
+                        }
+                        const maybe_left_mark = out_q.peek();
+                        if (maybe_left_mark) |left_mark| {
+                            const left = markups.get(left_mark.kind)[LEFT];
+                            if (count + left.len <= iter.limit) {
+                                count += try writer.write(left);
+                            } else {
+                                // This is fine
+                                // TODO is it? Similar situation to the above...
+                                return count;
+                            }
+                        }
+                    }
+                    // Write the rest of the string, if any
+                    const the_rest = string[iter.cursor..];
+                    if (count + the_rest.len <= iter.limit) {
+                        count += writer.write(the_rest);
+                        iter.cursor = string.len;
+                    } else {
+                        const enough = iter.cursor + (iter.limit - count);
+                        count += writer.write(string[iter.cursor..enough]);
+                        iter.cursor = enough;
+                        assert(count == iter.limit);
+                        return count;
+                    }
+
+                    return count;
+                }
+            };
+        }
+
         /// Our sort will yield an in-order top down tree:
         /// All marks which start before another mark come before
         /// all later marks, with all longer marks before shorter
