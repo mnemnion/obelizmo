@@ -42,6 +42,8 @@ pub fn MarkedString(Kind: type) type {
         /// up and using this type, see `std.enums.EnumArray`.
         pub const MarkupArray = std.enums.EnumArray(Kind, [2][]const u8);
 
+        //| Allocate and Free
+
         /// Initialize a MarkedString.  The string is not considered to be
         /// owned by the MarkedString, as such, the caller is responsible
         /// for its memory.  Call `marker.deinit()` to free the memory of
@@ -78,6 +80,8 @@ pub fn MarkedString(Kind: type) type {
             marker.queue.deinit();
         }
 
+        //| Marking
+
         /// Mark the slice `string[start..end]` with the provided `mark`.
         pub fn markSlice(
             marker: *SMark,
@@ -109,42 +113,39 @@ pub fn MarkedString(Kind: type) type {
             try marker.queue.add(the_mark);
         }
 
-        /// Find `needle` in string and mark with `mark`.  Returns `true`
-        /// if the needle was found and marked, otherwise `false`.
+        /// Find `needle` in string and mark with `mark`.  Returns the
+        /// index if the needle was found and marked, otherwise `null`.
         pub fn findAndMark(
             marker: *SMark,
             mark: Kind,
             needle: []const u8,
-        ) !bool {
+        ) !?usize {
             const idx = std.mem.indexOf(u8, marker.string, needle);
             if (idx) |i| {
                 try marker.markFrom(mark, i, needle.len);
-                return true;
-            } else return false;
+            }
+            return idx;
         }
 
         /// Find `needle` in string after `pos`, and mark with `mark`.
-        /// Returns `true` if the needle was found and marked, `false`
-        /// otherwise.
+        /// Returns the index if the needle was found and marked,
+        /// otherwise `null`.
         pub fn findAndMarkPos(
             marker: *SMark,
             mark: Kind,
             needle: []const u8,
             pos: usize,
-        ) !bool {
+        ) !?usize {
             const idx = std.mem.indexOfPos(u8, marker.string, pos, needle);
             if (idx) |i| {
                 try marker.markFrom(mark, i, needle.len);
-                return true;
-            } else return false;
+            }
+            return idx;
         }
 
-        const LEFT: usize = 0;
-        const RIGHT: usize = 1;
-
         /// Find last occurence of `needle` in string, and mark with
-        /// `mark`.  Returns `true` if the needle was found and marked,
-        /// `false` otherwise.
+        /// `mark`.  Returns the index if the needle was found and
+        ///  marked, `null` otherwise.
         pub fn findAndMarkLast(
             marker: *SMark,
             mark: Kind,
@@ -153,9 +154,63 @@ pub fn MarkedString(Kind: type) type {
             const idx = std.mem.lastIndexOf(u8, marker.string, needle);
             if (idx) |i| {
                 try marker.markFrom(mark, i, needle.len);
-                return true;
-            } else return false;
+            }
+            return idx;
         }
+
+        /// Match the string with an `mvzr` Regex, and mark the matched
+        /// region.  Returns the index of the match, or `null` if there
+        /// is none.
+        pub fn matchAndMark(
+            marker: *SMark,
+            mark: Kind,
+            regex: anytype,
+        ) !?usize {
+            const maybe_match = regex.match(marker.string);
+            if (maybe_match) |match| {
+                try marker.markSlice(mark, match.start, match.end);
+                return match.start;
+            } else {
+                return null;
+            }
+        }
+
+        /// Match the string with an `mvzr` Regex, starting from `pos`,
+        /// and mark the matched region.  Returns the index of the match,
+        /// or `null` if there is none.
+        pub fn matchAndMarkPos(
+            marker: *SMark,
+            mark: Kind,
+            pos: usize,
+            regex: anytype,
+        ) !?usize {
+            const maybe_match = regex.matchPos(pos, marker.string);
+            if (maybe_match) |match| {
+                try marker.markSlice(mark, match.start, match.end);
+                return match.start;
+            } else {
+                return null;
+            }
+        }
+
+        /// Match the string with an `mvzr` Regex, and mark all matched
+        /// regions.  Returns `true` if there were any matches, `false`
+        /// otherwise.
+        pub fn matchAndMarkAll(
+            marker: *SMark,
+            mark: Kind,
+            regex: anytype,
+        ) !bool {
+            var matcher = regex.iterator(marker.string);
+            var a_match = false;
+            while (matcher.next()) |match| {
+                a_match = true;
+                try marker.markSlice(mark, match.start, match.end);
+            }
+            return a_match;
+        }
+
+        //| Writing
 
         pub const StreamOption = enum {
             skip_on_zero_width,
@@ -167,7 +222,7 @@ pub fn MarkedString(Kind: type) type {
             writer: anytype,
             markups: MarkupArray,
         ) !void {
-            return marker.writeAsStreamWithOption(
+            return marker.writeAsStreamWithOptions(
                 writer,
                 markups,
                 .skip_on_zero_width,
@@ -185,12 +240,15 @@ pub fn MarkedString(Kind: type) type {
             };
         }
 
+        const LEFT: usize = 0;
+        const RIGHT: usize = 1;
+
         /// Write out the marked string as a stream: this is designed to
         /// work with protocols like ANSI terminal sequences, where the
         /// style signaling is in-band, and has to be repeated in order
-        /// for nested colors to function correctly.  If emitting a tree-
+        /// for nested regions to print correctly.  If emitting a tree-
         /// shaped markup syntax, such as XML or HTML, use `writeAsTree`.
-        pub fn writeAsStreamWithOption(
+        pub fn writeAsStreamWithOptions(
             marker: *const SMark,
             writer: anytype,
             markups: MarkupArray,
@@ -302,6 +360,7 @@ pub fn MarkedString(Kind: type) type {
         /// span or such.  Every mark is begun and ended once, with no
         /// logic to restart an outer span once an inner span is closed,
         /// as is necessary to get good results printing to a terminal.
+        /// For that purpose, use `writeAsStream`.
         pub fn writeAsTree(
             marker: *const SMark,
             writer: anytype,
@@ -479,26 +538,27 @@ const Colors = enum {
     // etc
 };
 
+const ColorMarker = MarkedString(Colors);
+const ColorArray = ColorMarker.MarkupArray;
+const color_markup = ColorArray.init(
+    .{
+        .red = .{ "<r>", "</r>" },
+        .blue = .{ "<b>", "</b>" },
+        .green = .{ "<g>", "</g>" },
+        .yellow = .{ "<y>", "</y>" },
+        .teal = .{ "<t>", "</t>" },
+    },
+);
+
 test "MarkedString writeAsStream writeAsTree" {
     const oh = OhSnap{};
     const allocator = testing.allocator;
-    const ColorMarker = MarkedString(Colors);
-    const ColorArray = ColorMarker.MarkupArray;
-    const color_markup = ColorArray.init(
-        .{
-            .red = .{ "<r>", "</r>" },
-            .blue = .{ "<b>", "</b>" },
-            .green = .{ "<g>", "</g>" },
-            .yellow = .{ "<y>", "</y>" },
-            .teal = .{ "<t>", "</t>" },
-        },
-    );
     var color_marker = try ColorMarker.initCapacity(allocator, "red blue green yellow", 4);
     defer color_marker.deinit();
-    try expect(try color_marker.findAndMark(.red, "red"));
-    try expect(try color_marker.findAndMark(.yellow, "yellow"));
-    try expect(try color_marker.findAndMark(.green, "green"));
-    try expect(try color_marker.findAndMark(.blue, "blue"));
+    try expectEqual(0, try color_marker.findAndMark(.red, "red"));
+    try expectEqual(15, try color_marker.findAndMark(.yellow, "yellow"));
+    try expectEqual(9, try color_marker.findAndMark(.green, "green"));
+    try expectEqual(4, try color_marker.findAndMark(.blue, "blue"));
     try color_marker.markSlice(.teal, 4, 14);
     try oh.snap(
         @src(),
@@ -553,6 +613,43 @@ test "MarkedString writeAsStream writeAsTree" {
         @src(),
         \\[]u8
         \\  "<r>red</r> <t><b>blue</b> <g>green</g></t> <y>yellow</y>"
+        ,
+    ).expectEqual(tree_string);
+}
+
+const Regex = @import("mvzr").Regex;
+
+test "MarkedString regex" {
+    const oh = OhSnap{};
+    const allocator = testing.allocator;
+    var color_marker = try ColorMarker.initCapacity(allocator, "func 10 funky 456", 4);
+    defer color_marker.deinit();
+    const num_regex = Regex.compile("\\d+").?;
+    try expectEqual(5, color_marker.matchAndMark(.blue, num_regex));
+    try expectEqual(14, try color_marker.matchAndMarkPos(.blue, 7, num_regex));
+    const alpha_regex = Regex.compile("[a-z]+").?;
+    try expect(try color_marker.matchAndMarkAll(.red, alpha_regex));
+    const u_regex = Regex.compile("u").?;
+    try expectEqual(9, try color_marker.matchAndMarkPos(.yellow, 5, u_regex));
+    var out_array = std.ArrayList(u8).init(allocator);
+    defer out_array.deinit();
+    const writer = out_array.writer();
+    try color_marker.writeAsStream(writer, color_markup);
+    const stream_string = try out_array.toOwnedSlice();
+    defer allocator.free(stream_string);
+    try oh.snap(
+        @src(),
+        \\[]u8
+        \\  "<r>func</r> <b>10</b> <r>f</r><y>u</y><r>nky</r> <b>456</b>"
+        ,
+    ).expectEqual(stream_string);
+    try color_marker.writeAsTree(writer, color_markup);
+    const tree_string = try out_array.toOwnedSlice();
+    defer allocator.free(tree_string);
+    try oh.snap(
+        @src(),
+        \\[]u8
+        \\  "<r>func</r> <b>10</b> <r>f<y>u</y>nky</r> <b>456</b>"
         ,
     ).expectEqual(tree_string);
 }
