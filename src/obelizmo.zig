@@ -470,11 +470,11 @@ pub fn MarkedString(Kind: type) type {
                     markups: MarkupArray,
                     limit: usize,
                     options: StreamOption,
-                ) StreamWrite {
+                ) !StreamWrite {
                     return StreamWrite{
                         .marker = marker,
                         .writer = writer,
-                        .in_q = cloneQueue(marker.queue),
+                        .in_q = try cloneQueue(marker.queue),
                         .out_q = SweepQueue.init(marker.queue.allocator, {}),
                         .markups = markups,
                         .limit = limit,
@@ -487,7 +487,7 @@ pub fn MarkedString(Kind: type) type {
                     writer: WriterType,
                     markups: MarkupArray,
                     limit: usize,
-                ) StreamWrite {
+                ) !StreamWrite {
                     return StreamWrite.initOptions(
                         marker,
                         writer,
@@ -498,12 +498,12 @@ pub fn MarkedString(Kind: type) type {
                 }
 
                 /// Free the iterator's allocated memory.
-                pub fn deinit(iter: *WriteIterator) void {
+                pub fn deinit(iter: *StreamWrite) void {
                     iter.in_q.deinit();
                     iter.out_q.deinit();
                 }
 
-                pub fn writeStream(iter: *WriteIterator) !?usize {
+                pub fn writeStream(iter: *StreamWrite) !?usize {
                     if (iter.cursor >= iter.marker.string.len) return null;
                     const string = iter.marker.string;
                     var in_q = &iter.in_q;
@@ -535,17 +535,15 @@ pub fn MarkedString(Kind: type) type {
                         };
                         // Write up to our next obelus.
                         if (iter.cursor < next_idx) {
-                            // Count is zero here.
-                            assert(count == 0);
-                            if (next_idx - iter.cursor < iter.limit) {
+                            if (count + (next_idx - iter.cursor) < iter.limit) {
                                 count += try writer.write(string[iter.cursor..next_idx]);
                             } else {
-                                const this_limit = (next_idx - iter.cursor) - iter.limit;
+                                const this_limit = iter.cursor + (iter.limit - count);
                                 count += try writer.write(string[iter.cursor..this_limit]);
                                 assert(count == iter.limit);
-                                iter.cursor += this_limit;
+                                iter.cursor = this_limit;
                                 // Replace the unused mark on the queue.
-                                in_q.add(this_mark);
+                                try in_q.add(mark);
                                 return count;
                             }
                             iter.cursor = next_idx;
@@ -587,7 +585,7 @@ pub fn MarkedString(Kind: type) type {
                                 count += try writer.write(left);
                             } else {
                                 // Replace the mark for next time.
-                                in_q.add(mark);
+                                try in_q.add(mark);
                                 return count;
                             }
                             // Enplace on the out queue.
@@ -597,7 +595,8 @@ pub fn MarkedString(Kind: type) type {
                             continue :marking;
                         } else {
                             // This mark isn't up yet, write the end off the queue.
-                            const end_mark = out_q.peek();
+                            // We know it exists:
+                            const end_mark = out_q.peek().?;
                             const right = markups.get(end_mark.kind)[RIGHT];
                             if (count + right.len <= iter.limit) {
                                 count += try writer.write(right);
@@ -633,7 +632,7 @@ pub fn MarkedString(Kind: type) type {
                             count += try writer.write(string[iter.cursor..slice_end]);
                         } else {
                             // Put it back.
-                            out_q.add(out_mark);
+                            try out_q.add(out_mark);
                             return count;
                         }
                         iter.cursor = slice_end;
@@ -642,7 +641,7 @@ pub fn MarkedString(Kind: type) type {
                             count += try writer.write(right);
                         } else {
                             // Put it back...
-                            out_q.add(out_mark);
+                            try out_q.add(out_mark);
                             return count;
                         }
                         const maybe_left_mark = out_q.peek();
@@ -660,11 +659,11 @@ pub fn MarkedString(Kind: type) type {
                     // Write the rest of the string, if any
                     const the_rest = string[iter.cursor..];
                     if (count + the_rest.len <= iter.limit) {
-                        count += writer.write(the_rest);
+                        count += try writer.write(the_rest);
                         iter.cursor = string.len;
                     } else {
                         const enough = iter.cursor + (iter.limit - count);
-                        count += writer.write(string[iter.cursor..enough]);
+                        count += try writer.write(string[iter.cursor..enough]);
                         iter.cursor = enough;
                         assert(count == iter.limit);
                         return count;
@@ -727,6 +726,7 @@ pub fn MarkedString(Kind: type) type {
 
 const testing = std.testing;
 const expectEqualSlices = testing.expectEqualSlices;
+const expectEqualStrings = testing.expectEqualStrings;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
 const OhSnap = @import("ohsnap");
@@ -896,4 +896,44 @@ test "MarkedString regex" {
         \\  "<r>func</r> <b>10</b> <r>f<y>u</y>nky</r> <b>456</b>"
         ,
     ).expectEqual(tree_string);
+}
+
+test "Write Iterator" {
+    const mark_string = "abc 123 def ghi 34 " ** 30;
+    const oh = OhSnap{};
+    const allocator = testing.allocator;
+    var color_marker = try ColorMarker.initCapacity(allocator, mark_string, 4);
+    defer color_marker.deinit();
+    const num_regex = Regex.compile("\\d+").?;
+    _ = try color_marker.matchAndMarkAll(.red, num_regex);
+    var out_array = std.ArrayList(u8).init(allocator);
+    defer out_array.deinit();
+    const writer = out_array.writer();
+    try color_marker.writeAsStream(writer, color_markup);
+    const reference_string = try out_array.toOwnedSlice();
+    defer allocator.free(reference_string);
+    try oh.snap(
+        @src(),
+        \\
+        ,
+    ).show(reference_string);
+    const WriteIterator = ColorMarker.WriteIterator(@TypeOf(writer));
+    {
+        var limit: usize = 7;
+        while (limit < reference_string.len) : (limit += 5) {
+            var iter = try WriteIterator.init(
+                &color_marker,
+                writer,
+                color_markup,
+                limit,
+            );
+            defer iter.deinit();
+            while (try iter.writeStream()) |c| {
+                if (c == 0) try expect(false);
+            }
+            const test_string = try out_array.toOwnedSlice();
+            defer allocator.free(test_string);
+            try expectEqualStrings(reference_string, test_string);
+        }
+    }
 }
