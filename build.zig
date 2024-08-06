@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Export as module to be available for @import("obelizmo") on user site
-    _ = b.addModule("obelizmo", .{
+    const obelizmo_module = b.addModule("obelizmo", .{
         .root_source_file = b.path("src/obelizmo.zig"),
         .target = target,
         .optimize = optimize,
@@ -30,6 +30,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     })) |ohsnap_dep| {
         lib_unit_tests.root_module.addImport("ohsnap", ohsnap_dep.module("ohsnap"));
+    }
+
+    if (b.lazyDependency("mvzr", .{
+        .target = target,
+        .optimize = optimize,
+    })) |mvzr_dep| {
+        lib_unit_tests.root_module.addImport("mvzr", mvzr_dep.module("mvzr"));
+        obelizmo_module.addImport("mvzr", mvzr_dep.module("mvzr"));
     }
 
     // Similar to creating the run step earlier, this exposes a `test` step to
