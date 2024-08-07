@@ -503,6 +503,10 @@ pub fn MarkedString(Kind: type) type {
                     iter.out_q.deinit();
                 }
 
+                fn printMark(string: []const u8, mark: Mark, nl: []const u8) void {
+                    std.debug.print("mark {s}{s}", .{ string[mark.offset .. mark.offset + mark.len], nl });
+                }
+
                 pub fn writeStream(iter: *StreamWrite) !?usize {
                     if (iter.cursor >= iter.marker.string.len) return null;
                     const string = iter.marker.string;
@@ -539,10 +543,15 @@ pub fn MarkedString(Kind: type) type {
                                 count += try writer.write(string[iter.cursor..next_idx]);
                             } else {
                                 const this_limit = iter.cursor + (iter.limit - count);
-                                count += try writer.write(string[iter.cursor..this_limit]);
+                                const frag = string[iter.cursor..this_limit];
+                                //  printMark(string, mark);
+                                //  std.debug.print("frag '{s}'\n", .{frag});
+                                //  std.debug.print("would print '{s}'\n\n", .{string[iter.cursor..next_idx]});
+                                count += try writer.write(frag);
                                 assert(count == iter.limit);
                                 iter.cursor = this_limit;
                                 // Replace the unused mark on the queue.
+                                // printMark(string, mark);
                                 try in_q.add(mark);
                                 return count;
                             }
@@ -602,7 +611,8 @@ pub fn MarkedString(Kind: type) type {
                                 count += try writer.write(right);
                                 _ = out_q.remove();
                             } else {
-                                // It'll be waiting for us next time.
+                                // Set it up for next time
+                                try in_q.add(mark);
                                 return count;
                             }
                             // Now stream the left mark from the next on-queue, if any.
@@ -899,8 +909,9 @@ test "MarkedString regex" {
 }
 
 test "Write Iterator" {
-    const mark_string = "abc 123 def ghi 34 " ** 30;
+    const mark_string = "abc 123 def ghi 34 \n" ** 30;
     const oh = OhSnap{};
+    _ = oh; // autofix
     const allocator = testing.allocator;
     var color_marker = try ColorMarker.initCapacity(allocator, mark_string, 4);
     defer color_marker.deinit();
@@ -912,11 +923,6 @@ test "Write Iterator" {
     try color_marker.writeAsStream(writer, color_markup);
     const reference_string = try out_array.toOwnedSlice();
     defer allocator.free(reference_string);
-    try oh.snap(
-        @src(),
-        \\
-        ,
-    ).show(reference_string);
     const WriteIterator = ColorMarker.WriteIterator(@TypeOf(writer));
     {
         var limit: usize = 7;
@@ -934,6 +940,29 @@ test "Write Iterator" {
             const test_string = try out_array.toOwnedSlice();
             defer allocator.free(test_string);
             try expectEqualStrings(reference_string, test_string);
+        }
+    }
+    const outer_regex = Regex.compile("123 def").?;
+    _ = try color_marker.matchAndMarkAll(.blue, outer_regex);
+    try color_marker.writeAsStream(writer, color_markup);
+    const out_ref_string = try out_array.toOwnedSlice();
+    defer allocator.free(out_ref_string);
+    {
+        var limit: usize = 7;
+        while (limit < reference_string.len) : (limit += 5) {
+            var iter = try WriteIterator.init(
+                &color_marker,
+                writer,
+                color_markup,
+                limit,
+            );
+            defer iter.deinit();
+            while (try iter.writeStream()) |c| {
+                if (c == 0) try expect(false);
+            }
+            const test_string = try out_array.toOwnedSlice();
+            defer allocator.free(test_string);
+            try expectEqualStrings(out_ref_string, test_string);
         }
     }
 }
