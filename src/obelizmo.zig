@@ -450,7 +450,11 @@ pub fn MarkedString(Kind: type) type {
         /// bytes.  The best thing is to simply not put yourself in that
         /// situation, but if, for instance, all marks are dynamic, you
         /// can at least detect the condition that way, and decide what
-        /// to do other than infinitely loop.
+        /// to do other than infinitely loop.  However, be aware that a
+        /// 0 byte return can happen at the end of the iteration, if
+        /// things line up that way.  If the rules here are followed, it
+        /// should be valid to break when you see a 0, or to keep looping,
+        /// because the next return should be null.
         pub fn WriteIterator(WriterType: type) type {
             return struct {
                 marker: *const SMark,
@@ -1050,8 +1054,6 @@ test "MarkedString regex" {
 
 test "Write Iterator" {
     const mark_string = "abc 123 def ghi 34 \n" ** 30;
-    const oh = OhSnap{};
-    _ = oh; // autofix
     const allocator = testing.allocator;
     var color_marker = try ColorMarker.initCapacity(allocator, mark_string, 4);
     defer color_marker.deinit();
@@ -1061,48 +1063,88 @@ test "Write Iterator" {
     defer out_array.deinit();
     const writer = out_array.writer();
     try color_marker.writeAsStream(writer, color_markup);
-    const reference_string = try out_array.toOwnedSlice();
-    defer allocator.free(reference_string);
+    const ref_stream_string = try out_array.toOwnedSlice();
+    defer allocator.free(ref_stream_string);
+    try color_marker.writeAsTree(writer, color_markup);
+    const ref_tree_string = try out_array.toOwnedSlice();
+    defer allocator.free(ref_tree_string);
     const WriteIterator = ColorMarker.WriteIterator(@TypeOf(writer));
     {
-        var limit: usize = 7;
-        while (limit < reference_string.len) : (limit += 5) {
+        var limit: usize = 4; // Exact maximum of strings in color_markup
+        while (limit < ref_stream_string.len + 2) : (limit += 1) {
             var iter = try WriteIterator.init(
                 &color_marker,
                 writer,
                 color_markup,
                 limit,
             );
-            defer iter.deinit();
-            while (try iter.writeStream()) |c| {
-                if (c == 0) try expect(false);
+            {
+                defer iter.deinit();
+                while (try iter.writeStream()) |c| {
+                    if (c == 0) break; // If this is early, the test will tell us that
+                }
+                const test_string = try out_array.toOwnedSlice();
+                defer allocator.free(test_string);
+                try expectEqualStrings(ref_stream_string, test_string);
             }
-            const test_string = try out_array.toOwnedSlice();
-            defer allocator.free(test_string);
-            try expectEqualStrings(reference_string, test_string);
+            iter = try WriteIterator.init(
+                &color_marker,
+                writer,
+                color_markup,
+                limit,
+            );
+            {
+                defer iter.deinit();
+                while (try iter.writeTree()) |c| {
+                    if (c == 0) break; // If this is early, the test will tell us that
+                }
+                const test_string = try out_array.toOwnedSlice();
+                defer allocator.free(test_string);
+                try expectEqualStrings(ref_tree_string, test_string);
+            }
         }
     }
     const outer_regex = Regex.compile("123 def").?;
     _ = try color_marker.matchAndMarkAll(.blue, outer_regex);
     try color_marker.writeAsStream(writer, color_markup);
-    const out_ref_string = try out_array.toOwnedSlice();
-    defer allocator.free(out_ref_string);
+    const out_stream_reference = try out_array.toOwnedSlice();
+    defer allocator.free(out_stream_reference);
+    try color_marker.writeAsTree(writer, color_markup);
+    const out_tree_reference = try out_array.toOwnedSlice();
+    defer allocator.free(out_tree_reference);
     {
-        var limit: usize = 7;
-        while (limit < reference_string.len) : (limit += 5) {
+        var limit: usize = 4;
+        while (limit < ref_stream_string.len) : (limit += 1) {
             var iter = try WriteIterator.init(
                 &color_marker,
                 writer,
                 color_markup,
                 limit,
             );
-            defer iter.deinit();
-            while (try iter.writeStream()) |c| {
-                if (c == 0) try expect(false);
+            {
+                defer iter.deinit();
+                while (try iter.writeStream()) |c| {
+                    if (c == 0) break; // If this is early, the test will tell us that
+                }
+                const test_string = try out_array.toOwnedSlice();
+                defer allocator.free(test_string);
+                try expectEqualStrings(out_stream_reference, test_string);
             }
-            const test_string = try out_array.toOwnedSlice();
-            defer allocator.free(test_string);
-            try expectEqualStrings(out_ref_string, test_string);
+            iter = try WriteIterator.init(
+                &color_marker,
+                writer,
+                color_markup,
+                limit,
+            );
+            {
+                defer iter.deinit();
+                while (try iter.writeTree()) |c| {
+                    if (c == 0) break; // If this is early, the test will tell us that
+                }
+                const test_string = try out_array.toOwnedSlice();
+                defer allocator.free(test_string);
+                try expectEqualStrings(out_tree_reference, test_string);
+            }
         }
     }
 }
