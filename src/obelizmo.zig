@@ -460,6 +460,7 @@ pub fn MarkedString(Kind: type) type {
                 out_q: SweepQueue,
                 limit: usize,
                 cursor: usize = 0,
+                print_left: bool = false,
                 options: StreamOption,
 
                 const StreamWrite = @This();
@@ -521,6 +522,20 @@ pub fn MarkedString(Kind: type) type {
                     var this_mark = in_q.removeOrNull();
                     const no_zero = iter.options == .skip_on_zero_width;
                     var count: usize = 0;
+                    // Check if we have a left to print:
+                    if (iter.print_left) {
+                        iter.print_left = false;
+                        const left_mark = out_q.peek().?;
+                        const left = markups.get(left_mark.kind)[LEFT];
+                        // if (no_zero and left_mark.final() == iter.cursor) {
+                        //     _ = out_q.remove();
+                        // }
+                        if (count + left.len <= iter.limit) {
+                            count += try writer.write(left);
+                        } else {
+                            return 0;
+                        }
+                    }
                     marking: while (this_mark) |mark| {
                         const maybe_next = out_q.peek();
                         var from_this_mark = true; // determines where we get our offset
@@ -539,19 +554,15 @@ pub fn MarkedString(Kind: type) type {
                         };
                         // Write up to our next obelus.
                         if (iter.cursor < next_idx) {
-                            if (count + (next_idx - iter.cursor) < iter.limit) {
+                            if (count + (next_idx - iter.cursor) <= iter.limit) {
                                 count += try writer.write(string[iter.cursor..next_idx]);
                             } else {
                                 const this_limit = iter.cursor + (iter.limit - count);
                                 const frag = string[iter.cursor..this_limit];
-                                //  printMark(string, mark);
-                                //  std.debug.print("frag '{s}'\n", .{frag});
-                                //  std.debug.print("would print '{s}'\n\n", .{string[iter.cursor..next_idx]});
                                 count += try writer.write(frag);
                                 assert(count == iter.limit);
                                 iter.cursor = this_limit;
                                 // Replace the unused mark on the queue.
-                                // printMark(string, mark);
                                 try in_q.add(mark);
                                 return count;
                             }
@@ -567,6 +578,7 @@ pub fn MarkedString(Kind: type) type {
                                     if (!no_zero or (no_zero and next.offset < iter.cursor)) {
                                         const right = markups.get(next.kind)[RIGHT];
                                         if (count + right.len > iter.limit) {
+                                            try in_q.add(mark);
                                             return count;
                                         } else {
                                             count += try writer.write(right);
@@ -625,9 +637,9 @@ pub fn MarkedString(Kind: type) type {
                                     if (count + left.len <= iter.limit) {
                                         count += try writer.write(left);
                                     } else {
-                                        // TODO this one might leave us in a bad state
-                                        // actually.  A conditional flag may be
-                                        // needed.
+                                        // Print it next time.
+                                        iter.print_left = true;
+                                        try in_q.add(mark);
                                         return count;
                                     }
                                 }
@@ -660,8 +672,8 @@ pub fn MarkedString(Kind: type) type {
                             if (count + left.len <= iter.limit) {
                                 count += try writer.write(left);
                             } else {
-                                // This is fine
-                                // TODO is it? Similar situation to the above...
+                                // Next time.
+                                iter.print_left = true;
                                 return count;
                             }
                         }
