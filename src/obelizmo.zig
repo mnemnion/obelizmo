@@ -504,6 +504,7 @@ pub fn MarkedString(Kind: type) type {
                     iter.out_q.deinit();
                 }
 
+                /// XXX Debug
                 fn printMark(string: []const u8, mark: Mark, nl: []const u8) void {
                     std.debug.print("mark {s}{s}", .{ string[mark.offset .. mark.offset + mark.len], nl });
                 }
@@ -556,6 +557,7 @@ pub fn MarkedString(Kind: type) type {
                         if (iter.cursor < next_idx) {
                             if (count + (next_idx - iter.cursor) <= iter.limit) {
                                 count += try writer.write(string[iter.cursor..next_idx]);
+                                assert(count <= iter.limit);
                             } else {
                                 const this_limit = iter.cursor + (iter.limit - count);
                                 const frag = string[iter.cursor..this_limit];
@@ -582,6 +584,7 @@ pub fn MarkedString(Kind: type) type {
                                             return count;
                                         } else {
                                             count += try writer.write(right);
+                                            assert(count <= iter.limit);
                                         }
                                     }
                                 }
@@ -604,6 +607,7 @@ pub fn MarkedString(Kind: type) type {
                             const left = markups.get(mark.kind)[LEFT];
                             if (count + left.len <= iter.limit) {
                                 count += try writer.write(left);
+                                assert(count <= iter.limit);
                             } else {
                                 // Replace the mark for next time.
                                 try in_q.add(mark);
@@ -621,6 +625,7 @@ pub fn MarkedString(Kind: type) type {
                             const right = markups.get(end_mark.kind)[RIGHT];
                             if (count + right.len <= iter.limit) {
                                 count += try writer.write(right);
+                                assert(count <= iter.limit);
                                 _ = out_q.remove();
                             } else {
                                 // Set it up for next time
@@ -636,6 +641,7 @@ pub fn MarkedString(Kind: type) type {
                                     const left = markups.get(left_mark.kind)[LEFT];
                                     if (count + left.len <= iter.limit) {
                                         count += try writer.write(left);
+                                        assert(count <= iter.limit);
                                     } else {
                                         // Print it next time.
                                         iter.print_left = true;
@@ -652,6 +658,7 @@ pub fn MarkedString(Kind: type) type {
                         const slice_end = out_mark.final();
                         if (count + (slice_end - iter.cursor) <= iter.limit) {
                             count += try writer.write(string[iter.cursor..slice_end]);
+                            assert(count <= iter.limit);
                         } else {
                             // Put it back.
                             try out_q.add(out_mark);
@@ -661,6 +668,7 @@ pub fn MarkedString(Kind: type) type {
                         const right = markups.get(out_mark.kind)[RIGHT];
                         if (count + right.len <= iter.limit) {
                             count += try writer.write(right);
+                            assert(count <= iter.limit);
                         } else {
                             // Put it back...
                             try out_q.add(out_mark);
@@ -671,6 +679,7 @@ pub fn MarkedString(Kind: type) type {
                             const left = markups.get(left_mark.kind)[LEFT];
                             if (count + left.len <= iter.limit) {
                                 count += try writer.write(left);
+                                assert(count <= iter.limit);
                             } else {
                                 // Next time.
                                 iter.print_left = true;
@@ -682,6 +691,125 @@ pub fn MarkedString(Kind: type) type {
                     const the_rest = string[iter.cursor..];
                     if (count + the_rest.len <= iter.limit) {
                         count += try writer.write(the_rest);
+                        assert(count <= iter.limit);
+                        iter.cursor = string.len;
+                    } else {
+                        const enough = iter.cursor + (iter.limit - count);
+                        count += try writer.write(string[iter.cursor..enough]);
+                        iter.cursor = enough;
+                        assert(count == iter.limit);
+                        return count;
+                    }
+
+                    return count;
+                }
+
+                pub fn writeTree(iter: *StreamWrite) !?usize {
+                    const string = iter.marker.string;
+                    var in_q = &iter.in_q;
+                    var out_q = &iter.out_q;
+                    var writer = &iter.writer;
+                    const markups = iter.markups;
+                    // TODO left marks, probably?
+                    var this_mark = in_q.removeOrNull();
+                    var count: usize = 0;
+                    marking: while (this_mark) |mark| {
+                        const maybe_next = out_q.peek();
+                        var from_this_mark = true; // determines where we get our offset
+                        const next_idx = idx: {
+                            if (maybe_next) |next_mark| {
+                                const next_mark_end = next_mark.final();
+                                if (next_mark_end < mark.offset) {
+                                    from_this_mark = false;
+                                    break :idx next_mark_end;
+                                } else {
+                                    break :idx mark.offset;
+                                }
+                            } else {
+                                break :idx mark.offset;
+                            }
+                        };
+                        // Write up to our next obelus
+                        if (iter.cursor < next_idx) {
+                            if (count + (next_idx - iter.cursor) <= iter.limit) {
+                                count += try writer.write(string[iter.cursor..next_idx]);
+                                assert(count <= iter.limit);
+                            } else {
+                                const this_limit = iter.cursor + (iter.limit - count);
+                                const frag = string[iter.cursor..this_limit];
+                                count += try writer.write(frag);
+                                assert(count == iter.limit);
+                                iter.cursor = this_limit;
+                                // Replace the unused mark on the queue.
+                                try in_q.add(mark);
+                                return count;
+                            }
+                            iter.cursor = next_idx;
+                        } else {
+                            // Invalid for the index to be behind the cursor.
+                            assert(iter.cursor == next_idx);
+                        }
+                        if (from_this_mark) {
+                            // Write our bookend.
+                            const left = markups.get(mark.kind)[LEFT];
+                            if (count + left.len <= iter.limit) {
+                                count += try writer.write(left);
+                                assert(count <= iter.limit);
+                            } else {
+                                // Replace the mark for next time.
+                                try in_q.add(mark);
+                                return count;
+                            }
+                            // Enplace on the out queue.
+                            try out_q.add(mark);
+                            // Pull the next mark.
+                            this_mark = in_q.removeOrNull();
+                            continue :marking;
+                        } else {
+                            // This mark isn't up yet, write the end off the queue.
+                            // We know it exists:
+                            const end_mark = out_q.peek().?;
+                            const right = markups.get(end_mark.kind)[RIGHT];
+                            if (count + right.len <= iter.limit) {
+                                count += try writer.write(right);
+                                assert(count <= iter.limit);
+                                _ = out_q.remove();
+                            } else {
+                                // Set it up for next time
+                                try in_q.add(mark);
+                                return count;
+                            }
+                            // Now stream the left mark from the next on-queue, if any.
+                            continue :marking;
+                        }
+                    } // end :marking
+                    // There may still be marks on the out queue to drain
+                    while (out_q.removeOrNull()) |out_mark| {
+                        const slice_end = out_mark.final();
+                        if (count + (slice_end - iter.cursor) <= iter.limit) {
+                            count += try writer.write(string[iter.cursor..slice_end]);
+                            assert(count <= iter.limit);
+                        } else {
+                            // Put it back.
+                            try out_q.add(out_mark);
+                            return count;
+                        }
+                        iter.cursor = slice_end;
+                        const right = markups.get(out_mark.kind)[RIGHT];
+                        if (count + right.len <= iter.limit) {
+                            count += try writer.write(right);
+                            assert(count <= iter.limit);
+                        } else {
+                            // Put it back...
+                            try out_q.add(out_mark);
+                            return count;
+                        }
+                    }
+                    // Write the rest of the string, if any
+                    const the_rest = string[iter.cursor..];
+                    if (count + the_rest.len <= iter.limit) {
+                        count += try writer.write(the_rest);
+                        assert(count <= iter.limit);
                         iter.cursor = string.len;
                     } else {
                         const enough = iter.cursor + (iter.limit - count);
