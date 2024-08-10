@@ -15,16 +15,17 @@ pub fn EncodedWriter(
     return struct {
         context: *WriterType,
         const EncodeWrite = @This();
+        pub const Error = WriterType.Error;
 
         pub fn init(context: *WriterType) EncodeWrite {
             return EncodeWrite{ .context = context };
         }
 
-        pub fn writeEncode(e_write: *EncodeWrite, bytes: []const u8) WriterType.Error!usize {
+        pub fn writeEncode(e_write: *EncodeWrite, bytes: []const u8) Error!usize {
             return try writeEncodeFn(e_write.context, bytes);
         }
 
-        pub fn write(e_write: *EncodeWrite, bytes: []const u8) WriterType.Error!usize {
+        pub fn write(e_write: *EncodeWrite, bytes: []const u8) Error!usize {
             return try e_write.context.write(bytes);
         }
     };

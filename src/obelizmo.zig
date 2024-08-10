@@ -4,6 +4,8 @@ const Allocator = std.mem.Allocator;
 const PriorityQueue = std.PriorityQueue;
 const Order = std.math.Order;
 
+const encoded_writer = @import("encoded_writer.zig");
+
 pub fn MarkedString(Kind: type) type {
     switch (@typeInfo(Kind)) {
         .Enum => {},
@@ -38,7 +40,7 @@ pub fn MarkedString(Kind: type) type {
         const MarkQueue = PriorityQueue(Mark, void, compare);
 
         /// Queue for writing `Marks`.
-        const SweepQueue = PriorityQueue(Mark, void, compareEnds);
+        const OutQueue = PriorityQueue(Mark, void, compareEnds);
 
         //| Allocate and Free
 
@@ -286,7 +288,7 @@ pub fn MarkedString(Kind: type) type {
             const string = marker.string;
             var in_q = try cloneQueue(marker.queue);
             defer in_q.deinit();
-            var out_q = SweepQueue.init(allocator, {});
+            var out_q = OutQueue.init(allocator, {});
             defer out_q.deinit();
             // Some rounds of the while loop will skip a mark, so we pop the queue
             // manually:
@@ -385,27 +387,30 @@ pub fn MarkedString(Kind: type) type {
         /// span or such.  Every mark is begun and ended once, with no
         /// logic to restart an outer span once an inner span is closed,
         /// as is necessary to get good results printing to a terminal.
-        /// For that purpose, use `writeAsStream`.
+        /// For that purpose, use `writeAsStream`.  Note that this must
+        /// be called with an `EncodedWriter`, or some type offering
+        /// compatible functions.
         pub fn writeAsTree(
             marker: *const SMark,
             writer: anytype,
             markups: MarkupArray,
-        ) error{OutOfMemory}!void {
+        ) @TypeOf(writer.*).Error!usize {
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
             const string = marker.string;
             var in_q = try cloneQueue(marker.queue);
             defer in_q.deinit();
-            var out_q = SweepQueue.init(allocator, {});
+            var out_q = OutQueue.init(allocator, {});
             defer out_q.deinit();
             // Some rounds of the while loop will skip a mark, so we pop the queue
             // manually:
             var this_mark = in_q.removeOrNull();
             var cursor: usize = 0;
+            var count: usize = 0;
             marking: while (this_mark) |mark| {
                 const maybe_next = out_q.peek();
-                var from_this_mark = true; // determines where we get our offset
+                var from_this_mark = true; // Determines where we get our index
                 const next_idx = idx: {
                     if (maybe_next) |next_mark| {
                         const next_mark_end = next_mark.final();
@@ -421,13 +426,13 @@ pub fn MarkedString(Kind: type) type {
                 };
                 // Write up to our next obelus
                 if (cursor < next_idx) {
-                    try writer.writeAll(string[cursor..next_idx]);
+                    count += try writer.writeEncode(string[cursor..next_idx]);
                 }
                 cursor = next_idx;
                 if (from_this_mark) {
                     // Write our bookend.
                     const left = markups.get(mark.kind)[LEFT];
-                    try writer.writeAll(left);
+                    count += try writer.write(left);
                     // Enplace on the out queue.
                     try out_q.add(mark);
                     // Replace mark.
@@ -437,7 +442,7 @@ pub fn MarkedString(Kind: type) type {
                     // This mark isn't up yet, write the end off the queue.
                     const end_mark = out_q.remove();
                     const right = markups.get(end_mark.kind)[RIGHT];
-                    try writer.writeAll(right);
+                    count += try writer.write(right);
                     // Now stream the left mark from the next on-queue, if any.
                     continue :marking;
                 }
@@ -445,15 +450,15 @@ pub fn MarkedString(Kind: type) type {
             // There may still be marks on the out queue to drain
             while (out_q.removeOrNull()) |out_mark| {
                 const slice_end = out_mark.final();
-                try writer.writeAll(string[cursor..slice_end]);
+                count += try writer.writeEncode(string[cursor..slice_end]);
                 cursor = slice_end;
                 const right = markups.get(out_mark.kind)[RIGHT];
-                try writer.writeAll(right);
+                count += try writer.write(right);
             }
             // Write the rest of the string, if any
-            try writer.writeAll(string[cursor..]);
+            count += try writer.writeEncode(string[cursor..]);
 
-            return;
+            return count;
         }
 
         /// Our sort will yield an in-order top down tree:
@@ -632,7 +637,8 @@ test "MarkedString writeAsStream writeAsTree" {
         \\  "<r>red</r> <b>blue</b><t> </t><g>green</g> <y>yellow</y>"
         ,
     ).expectEqual(stream_string);
-    try color_marker.writeAsTree(&stream_writer, color_markup);
+    var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(stream_writer)).init(&stream_writer);
+    _ = try color_marker.writeAsTree(&wrapped_stream, color_markup);
     const tree_string = try out_array.toOwnedSlice();
     defer allocator.free(tree_string);
     try oh.snap(
@@ -659,8 +665,8 @@ test "MarkedString regex" {
     try expectEqual(9, try color_marker.matchAndMarkPos(.yellow, 5, u_regex));
     var out_array = std.ArrayList(u8).init(allocator);
     defer out_array.deinit();
-    const writer = out_array.writer();
-    try color_marker.writeAsStream(writer, color_markup);
+    var writer = out_array.writer();
+    try color_marker.writeAsStream(&writer, color_markup);
     const stream_string = try out_array.toOwnedSlice();
     defer allocator.free(stream_string);
     try oh.snap(
@@ -669,7 +675,8 @@ test "MarkedString regex" {
         \\  "<r>func</r> <b>10</b> <r>f</r><y>u</y><r>nky</r> <b>456</b>"
         ,
     ).expectEqual(stream_string);
-    try color_marker.writeAsTree(writer, color_markup);
+    var wrapped_writer = encoded_writer.DefaultEncodedWriter(@TypeOf(writer)).init(&writer);
+    _ = try color_marker.writeAsTree(&wrapped_writer, color_markup);
     const tree_string = try out_array.toOwnedSlice();
     defer allocator.free(tree_string);
     try oh.snap(
