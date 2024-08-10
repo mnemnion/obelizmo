@@ -10,37 +10,35 @@ pub fn MarkedString(Kind: type) type {
         else => @compileError("MarkedString must be given an enum"),
     }
 
-    const Mark = struct {
-        kind: Kind,
-        offset: u32,
-        len: u32,
-
-        fn final(mark: @This()) u32 {
-            return mark.offset + mark.len;
-        }
-
-        fn value(mark: @This()) usize {
-            return @intFromEnum(mark.kind);
-        }
-    };
-
     return struct {
         string: []const u8,
         queue: MarkQueue,
 
         const SMark = @This();
 
-        /// Queue for applying Marks.
-        const MarkQueue = PriorityQueue(Mark, void, compare);
+        /// A single `Mark` on a `MarkedString`.
+        pub const Mark = struct {
+            kind: Kind,
+            offset: u32,
+            len: u32,
 
-        /// Queue for writing Marks.
-        const SweepQueue = PriorityQueue(Mark, void, compareEnds);
+            /// Obtain the final boundary of the `Mark`.
+            pub fn final(mark: @This()) u32 {
+                return mark.offset + mark.len;
+            }
+        };
 
         /// The EnumArray type expected by MarkedString printing functions.
         /// Initialized with a value of `[2][]const u8`, representing a pair of
         /// bookends for printing the marked string.  For information in setting
         /// up and using this type, see `std.enums.EnumArray`.
         pub const MarkupArray = std.enums.EnumArray(Kind, [2][]const u8);
+
+        /// Queue for applying `Marks`.
+        const MarkQueue = PriorityQueue(Mark, void, compare);
+
+        /// Queue for writing `Marks`.
+        const SweepQueue = PriorityQueue(Mark, void, compareEnds);
 
         //| Allocate and Free
 
@@ -88,8 +86,8 @@ pub fn MarkedString(Kind: type) type {
             mark: Kind,
             start: usize,
             end: usize,
-        ) !void {
-            if (start > end) return error.InvalidSliceBoundary;
+        ) error{ OutOfMemory, InvalidRegion }!void {
+            if (start > end or end > marker.string.len) return error.InvalidRegion;
             const the_mark = Mark{
                 .kind = mark,
                 .offset = @intCast(start),
@@ -104,7 +102,9 @@ pub fn MarkedString(Kind: type) type {
             mark: Kind,
             offset: usize,
             len: usize,
-        ) !void {
+        ) error{ OutOfMemory, InvalidRegion }!void {
+            if (offset + len > marker.string.len or offset > marker.string.len)
+                return error.InvalidRegion;
             const the_mark = Mark{
                 .kind = mark,
                 .offset = @intCast(offset),
@@ -119,10 +119,15 @@ pub fn MarkedString(Kind: type) type {
             marker: *SMark,
             mark: Kind,
             needle: []const u8,
-        ) !?usize {
+        ) error{OutOfMemory}!?usize {
             const idx = std.mem.indexOf(u8, marker.string, needle);
             if (idx) |i| {
-                try marker.markFrom(mark, i, needle.len);
+                marker.markFrom(mark, i, needle.len) catch |e| {
+                    switch (e) {
+                        error.OutOfMemory => |err| return err,
+                        else => unreachable,
+                    }
+                };
             }
             return idx;
         }
@@ -135,7 +140,7 @@ pub fn MarkedString(Kind: type) type {
             mark: Kind,
             needle: []const u8,
             pos: usize,
-        ) !?usize {
+        ) error{OutOfMemory}!?usize {
             const idx = std.mem.indexOfPos(u8, marker.string, pos, needle);
             if (idx) |i| {
                 try marker.markFrom(mark, i, needle.len);
@@ -150,10 +155,15 @@ pub fn MarkedString(Kind: type) type {
             marker: *SMark,
             mark: Kind,
             needle: []const u8,
-        ) !bool {
+        ) error{OutOfMemory}!bool {
             const idx = std.mem.lastIndexOf(u8, marker.string, needle);
             if (idx) |i| {
-                try marker.markFrom(mark, i, needle.len);
+                marker.markFrom(mark, i, needle.len) catch |e| {
+                    switch (e) {
+                        error.OutOfMemory => |err| return err,
+                        else => unreachable,
+                    }
+                };
             }
             return idx;
         }
@@ -165,10 +175,15 @@ pub fn MarkedString(Kind: type) type {
             marker: *SMark,
             mark: Kind,
             regex: anytype,
-        ) !?usize {
+        ) error{OutOfMemory}!?usize {
             const maybe_match = regex.match(marker.string);
             if (maybe_match) |match| {
-                try marker.markSlice(mark, match.start, match.end);
+                marker.markSlice(mark, match.start, match.end) catch |e| {
+                    switch (e) {
+                        error.OutOfMemory => |err| return err,
+                        else => unreachable,
+                    }
+                };
                 return match.start;
             } else {
                 return null;
@@ -183,10 +198,15 @@ pub fn MarkedString(Kind: type) type {
             mark: Kind,
             pos: usize,
             regex: anytype,
-        ) !?usize {
+        ) error{OutOfMemory}!?usize {
             const maybe_match = regex.matchPos(pos, marker.string);
             if (maybe_match) |match| {
-                try marker.markSlice(mark, match.start, match.end);
+                marker.markSlice(mark, match.start, match.end) catch |e| {
+                    switch (e) {
+                        error.OutOfMemory => |err| return err,
+                        else => unreachable,
+                    }
+                };
                 return match.start;
             } else {
                 return null;
@@ -200,12 +220,17 @@ pub fn MarkedString(Kind: type) type {
             marker: *SMark,
             mark: Kind,
             regex: anytype,
-        ) !bool {
+        ) error{OutOfMemory}!bool {
             var matcher = regex.iterator(marker.string);
             var a_match = false;
             while (matcher.next()) |match| {
                 a_match = true;
-                try marker.markSlice(mark, match.start, match.end);
+                marker.markSlice(mark, match.start, match.end) catch |e| {
+                    switch (e) {
+                        error.OutOfMemory => |err| return err,
+                        else => unreachable,
+                    }
+                };
             }
             return a_match;
         }
@@ -229,7 +254,7 @@ pub fn MarkedString(Kind: type) type {
             );
         }
 
-        fn cloneQueue(queue: MarkQueue) !MarkQueue {
+        fn cloneQueue(queue: MarkQueue) error{OutOfMemory}!MarkQueue {
             const nu_q_slice = try queue.allocator.alloc(Mark, queue.items.len);
             @memcpy(nu_q_slice, queue.items);
             return MarkQueue{
@@ -253,7 +278,7 @@ pub fn MarkedString(Kind: type) type {
             writer: anytype,
             markups: MarkupArray,
             option: StreamOption,
-        ) !void {
+        ) error{OutOfMemory}!void {
             const no_zero = option == .skip_on_zero_width;
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
@@ -365,7 +390,7 @@ pub fn MarkedString(Kind: type) type {
             marker: *const SMark,
             writer: anytype,
             markups: MarkupArray,
-        ) !void {
+        ) error{OutOfMemory}!void {
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
@@ -441,7 +466,7 @@ pub fn MarkedString(Kind: type) type {
         /// memory internally, use `write_iterator.deinit()` to free
         /// after use.
         ///
-        /// ## Usage Note
+        /// ## Usage Notes
         ///
         /// The limit provided must be larger than any of the decoraters
         /// in the `MarkupArray`, or the write will be unable to process,
@@ -508,12 +533,9 @@ pub fn MarkedString(Kind: type) type {
                     iter.out_q.deinit();
                 }
 
-                /// XXX Debug
-                fn printMark(string: []const u8, mark: Mark, nl: []const u8) void {
-                    std.debug.print("mark {s}{s}", .{ string[mark.offset .. mark.offset + mark.len], nl });
-                }
-
-                pub fn writeStream(iter: *StreamWrite) !?usize {
+                /// Write up to `limit` bytes in the streaming style.  For
+                /// details on what this means, see `MarkedString.writeAsStream`.
+                pub fn writeStream(iter: *StreamWrite) error{OutOfMemory}!?usize {
                     if (iter.cursor >= iter.marker.string.len) return null;
                     const string = iter.marker.string;
                     var in_q = &iter.in_q;
@@ -708,7 +730,9 @@ pub fn MarkedString(Kind: type) type {
                     return count;
                 }
 
-                pub fn writeTree(iter: *StreamWrite) !?usize {
+                /// Write up to `limit` bytes in the tree style.  For
+                /// details on what this means, see `MarkedString.writeAsTree`.
+                pub fn writeTree(iter: *StreamWrite) error{OutOfMemory}!?usize {
                     const string = iter.marker.string;
                     var in_q = &iter.in_q;
                     var out_q = &iter.out_q;
@@ -901,18 +925,18 @@ test "MarkedString" {
     try markup.markSlice(.dah, 11, 14);
     try oh.snap(
         @src(),
-        \\[]obelizmo.MarkedString.Mark
-        \\  [0]: obelizmo.MarkedString.Mark
+        \\[]obelizmo.MarkedString(..).Mark
+        \\  [0]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .dee
         \\    .offset: u32 = 0
         \\    .len: u32 = 11
-        \\  [1]: obelizmo.MarkedString.Mark
+        \\  [1]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .la
         \\    .offset: u32 = 0
         \\    .len: u32 = 4
-        \\  [2]: obelizmo.MarkedString.Mark
+        \\  [2]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .dah
         \\    .offset: u32 = 11
@@ -960,28 +984,28 @@ test "MarkedString writeAsStream writeAsTree" {
     try color_marker.markSlice(.teal, 4, 14);
     try oh.snap(
         @src(),
-        \\[]obelizmo.MarkedString.Mark
-        \\  [0]: obelizmo.MarkedString.Mark
+        \\[]obelizmo.MarkedString(..).Mark
+        \\  [0]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.Colors
         \\      .red
         \\    .offset: u32 = 0
         \\    .len: u32 = 3
-        \\  [1]: obelizmo.MarkedString.Mark
+        \\  [1]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.Colors
         \\      .teal
         \\    .offset: u32 = 4
         \\    .len: u32 = 10
-        \\  [2]: obelizmo.MarkedString.Mark
+        \\  [2]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.Colors
         \\      .green
         \\    .offset: u32 = 9
         \\    .len: u32 = 5
-        \\  [3]: obelizmo.MarkedString.Mark
+        \\  [3]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.Colors
         \\      .yellow
         \\    .offset: u32 = 15
         \\    .len: u32 = 6
-        \\  [4]: obelizmo.MarkedString.Mark
+        \\  [4]: obelizmo.MarkedString(..).Mark
         \\    .kind: obelizmo.Colors
         \\      .blue
         \\    .offset: u32 = 4
@@ -1147,4 +1171,20 @@ test "Write Iterator" {
             }
         }
     }
+}
+
+test "print ArrayList" {
+    const oh = OhSnap{};
+    const ArrayOfEight = std.ArrayList(u8);
+    try oh.snap(
+        @src(),
+        \\
+        ,
+    ).show(@typeInfo(ArrayOfEight));
+    try oh.snap(
+        @src(),
+        \\
+        ,
+    ).show(&std.ArrayList(u8));
+    //
 }
