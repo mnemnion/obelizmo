@@ -248,7 +248,7 @@ pub fn MarkedString(Kind: type) type {
             marker: *const SMark,
             writer: anytype,
             markups: MarkupArray,
-        ) !void {
+        ) @TypeOf(writer.*).Error!usize {
             return marker.writeAsStreamWithOptions(
                 writer,
                 markups,
@@ -280,7 +280,7 @@ pub fn MarkedString(Kind: type) type {
             writer: anytype,
             markups: MarkupArray,
             option: StreamOption,
-        ) error{OutOfMemory}!void {
+        ) @TypeOf(writer.*).Error!usize {
             const no_zero = option == .skip_on_zero_width;
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
@@ -294,6 +294,7 @@ pub fn MarkedString(Kind: type) type {
             // manually:
             var this_mark = in_q.removeOrNull();
             var cursor: usize = 0;
+            var count: usize = 0;
             marking: while (this_mark) |mark| {
                 const maybe_next = out_q.peek();
                 var from_this_mark = true; // determines where we get our offset
@@ -312,7 +313,7 @@ pub fn MarkedString(Kind: type) type {
                 };
                 // Write up to our next obelus
                 if (cursor < next_idx) {
-                    try writer.writeAll(string[cursor..next_idx]);
+                    count += try writer.write(string[cursor..next_idx]);
                 }
                 cursor = next_idx;
                 if (from_this_mark) {
@@ -321,7 +322,7 @@ pub fn MarkedString(Kind: type) type {
                         if (next.final() > mark.offset) {
                             if (!no_zero or (no_zero and next.offset < cursor)) {
                                 const right = markups.get(next.kind)[RIGHT];
-                                try writer.writeAll(right);
+                                count += try writer.write(right);
                             }
                         }
                     }
@@ -339,7 +340,7 @@ pub fn MarkedString(Kind: type) type {
                         }
                     }
                     const left = markups.get(mark.kind)[LEFT];
-                    try writer.writeAll(left);
+                    count += try writer.write(left);
                     // Enplace on the out queue.
                     try out_q.add(mark);
                     // Replace mark.
@@ -349,7 +350,7 @@ pub fn MarkedString(Kind: type) type {
                     // This mark isn't up yet, write the end off the queue.
                     const end_mark = out_q.remove();
                     const right = markups.get(end_mark.kind)[RIGHT];
-                    try writer.writeAll(right);
+                    count += try writer.write(right);
                     // Now stream the left mark from the next on-queue, if any.
                     const maybe_left_mark = out_q.peek();
                     if (maybe_left_mark) |left_mark| {
@@ -357,7 +358,7 @@ pub fn MarkedString(Kind: type) type {
                             _ = out_q.remove();
                         } else {
                             const left = markups.get(left_mark.kind)[LEFT];
-                            try writer.writeAll(left);
+                            count += try writer.write(left);
                         }
                     }
                     continue :marking;
@@ -366,20 +367,20 @@ pub fn MarkedString(Kind: type) type {
             // There may still be marks on the out queue to drain
             while (out_q.removeOrNull()) |out_mark| {
                 const slice_end = out_mark.final();
-                try writer.writeAll(string[cursor..slice_end]);
+                count += try writer.write(string[cursor..slice_end]);
                 cursor = slice_end;
                 const right = markups.get(out_mark.kind)[RIGHT];
-                try writer.writeAll(right);
+                count += try writer.write(right);
                 const maybe_left_mark = out_q.peek();
                 if (maybe_left_mark) |left_mark| {
                     const left = markups.get(left_mark.kind)[LEFT];
-                    try writer.writeAll(left);
+                    count += try writer.write(left);
                 }
             }
             // Write the rest of the string, if any
-            try writer.writeAll(string[cursor..]);
+            count += try writer.write(string[cursor..]);
 
-            return;
+            return count;
         }
 
         /// Write the `MarkedString` as a tree.  This is more compatible
@@ -485,10 +486,11 @@ pub fn MarkedString(Kind: type) type {
         }
 
         /// This compare function is used for the out queue,
-        /// so it only cares about offset + len.  The tie-breaker
-        /// by enum is in the opposite order, so that two different
-        /// enums of the same offset and len will be applied in the
-        /// correct order, such that one nests within the other.
+        /// so first checks offset + len, and second, len alone.
+        /// The tie-breaker by enum is in the opposite order, so
+        /// that two different enums of the same offset and len
+        /// will be applied in the correct order, such that one
+        /// nests within the other.
         fn compareEnds(_: void, left: Mark, right: Mark) Order {
             const l_final = left.final();
             const r_final = right.final();
@@ -628,7 +630,7 @@ test "MarkedString writeAsStream writeAsTree" {
     var out_array = std.ArrayList(u8).init(allocator);
     defer out_array.deinit();
     var stream_writer = out_array.writer();
-    try color_marker.writeAsStream(&stream_writer, color_markup);
+    _ = try color_marker.writeAsStream(&stream_writer, color_markup);
     const stream_string = try out_array.toOwnedSlice();
     defer allocator.free(stream_string);
     try oh.snap(
@@ -666,7 +668,7 @@ test "MarkedString regex" {
     var out_array = std.ArrayList(u8).init(allocator);
     defer out_array.deinit();
     var writer = out_array.writer();
-    try color_marker.writeAsStream(&writer, color_markup);
+    _ = try color_marker.writeAsStream(&writer, color_markup);
     const stream_string = try out_array.toOwnedSlice();
     defer allocator.free(stream_string);
     try oh.snap(
