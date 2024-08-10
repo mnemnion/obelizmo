@@ -2,7 +2,11 @@
 
 This library provides a flexible system for marking up text, a practice referred to in ancient days as [Obelism](https://en.wikipedia.org/wiki/Obelism).  A relic of this use is the [obelus](https://en.wikipedia.org/wiki/Obelus), which you know is an oddball word, since in English, it means `÷` or `†`, depending.
 
-The goal of `obelizmo` is to provide a performant and output-agnostic way to mark up a string, keeping the metadata and the text separate.  To use the library, define an `enum` of all the categories of markup you intend to use, a simple example:
+The goal of `obelizmo` is to provide a performant and output-agnostic way to mark up a string, keeping the metadata and the text separate.  A claim like "output-agnostic" always has its limits: `obelizmo` in its present state is a capable obelist of ANSI escape sequences and HTML, and the mechanism provided is, perhaps, general enough to accomodate other formats as well.
+
+## Marking Strings
+
+To use the library, define an `enum` of all the categories of markup you intend to use.  A simple example:
 
 ```zig
 const Colors = enum(u32) {
@@ -68,15 +72,15 @@ _ = try string_marker.findAndMarkLast(.yellow, "line");
 
 ### Match and Mark
 
-The last way to apply marks is by using an [mvzr Regex](https://github.com/mnemnion/mvzr), or several.  These functions are actually type-generic, so anything which precisely matches the interface and field names used in `mvzr` would suffice, but so far as I'm aware, that list only includes `mvzr` at the present time.
+The last way to apply marks is by using an [mvzr Regex](https://github.com/mnemnion/mvzr), or several.  These functions are actually type-generic, so anything which precisely matches the interface and field names used in `mvzr` would suffice.  But so far as I'm aware, that list only includes `mvzr` at the present time.
 
 ```zig
-const number_regex = mvzr.Regex.compile("\d+").?;
+const number_regex = mvzr.Regex.compile("\\d+").?;
 const index: ?usize = try string_marker.matchAndMark(.teal, number_regex);
 if (index) |i| {
    _ = try string_marker.matchAndMarkPos(.yellow, number_regex, index.? + 10);
 }
-const fizz_regex = mvzr.Regex.compile("[Ff]izz([Bb]uzz)?)").?;
+const fizz_regex = mvzr.Regex.compile("([Ff]izz([Bb]uzz))?|[Bbuzz])").?;
 const did_match: bool = try string_marker.matchAndMarkAll(.teal, fizz_regex);
 if (!did_match) {
     std.debug.print("definitely not fizzbuzz\n", .{});
@@ -91,9 +95,7 @@ Once your `MarkedString` is marked, you'll probably want to print it to somethin
 
 The basic distinction is between formats which use in-band signaling for styling, and those which build a tree-like structure.  I won't be coy here: the goal is to be able to print [ANSI escape codes](https://en.wikipedia.org/wiki/ANSI_escape_code) and [HTML Markup](https://en.wikipedia.org/wiki/HTML) from a single canonical source, and this has been the focus so far.
 
-At present, the terminal case is most fully supported, since HTML has needs like character escaping, and can benefit from even more detailed customization than this.  To have a nice comfortable interface for that, I'll need to design one, and to date, I haven't.  Watch this space, though.
-
-The current printing functions form a quadrant, where the two styles are stream-style and tree-style.
+These are handled using `marked_string.writeStream(writer)` and marked_string.writeTree(encoded_writer)`, respectively.
 
 ### Printing A MarkedString to the Terminal
 
