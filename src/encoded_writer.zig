@@ -10,25 +10,41 @@ const std = @import("std");
 /// expose the standard Writer interface.
 pub fn EncodedWriter(
     WriterType: type,
-    writeEncodeFn: *const fn (writer: WriterType, bytes: []const u8) WriterType.Error!usize,
+    writeEncodeFn: *const fn (writer: *WriterType, bytes: []const u8) WriterType.Error!usize,
 ) type {
     return struct {
-        context: WriterType,
+        context: *WriterType,
         const EncodeWrite = @This();
 
-        pub fn writeEncode(e_write: *const EncodeWrite, bytes: []const u8) WriterType.Error!usize {
-            return try writeEncodeFn(&e_write.context, bytes);
+        pub fn init(context: *WriterType) EncodeWrite {
+            return EncodeWrite{ .context = context };
         }
 
-        pub fn write(e_write: *const EncodeWrite, bytes: []const u8) WriterType.Error!usize {
+        pub fn writeEncode(e_write: *EncodeWrite, bytes: []const u8) WriterType.Error!usize {
+            return try writeEncodeFn(e_write.context, bytes);
+        }
+
+        pub fn write(e_write: *EncodeWrite, bytes: []const u8) WriterType.Error!usize {
             return try e_write.context.write(bytes);
         }
     };
 }
 
+/// Return an EncodedWriter which will escape HTML markup characters into
+/// their character entity form.
 pub fn HtmlEncodedWriter(WriterType: type) type {
     const writeEncodeFn = htmlEscapeEncoder(WriterType);
     return EncodedWriter(WriterType, writeEncodeFn);
+}
+
+/// Return an EncodedWriter which does no encoding of the bytes provided.
+pub fn DefaultEncodedWriter(WriterType: type) type {
+    const defaultEncodeFn = struct {
+        fn writeEncode(writer: *const WriterType, bytes: []const u8) WriterType.Error!usize {
+            return try writer.write(bytes);
+        }
+    }.writeEncode;
+    return EncodedWriter(WriterType, defaultEncodeFn);
 }
 
 /// Return a `writeEncode` function compatible with an `EncodedWriter` specialized
@@ -37,6 +53,8 @@ pub fn htmlEscapeEncoder(
     WriterType: type,
 ) fn (*WriterType, []const u8) WriterType.Error!usize {
     return struct {
+        // TODO more efficient to write out when we hit an entity,
+        // wrather than calling writeByte so often.
         fn writeEncodeFn(writer: *WriterType, bytes: []const u8) WriterType.Error!usize {
             var count: usize = 0;
             for (bytes, 0..) |byte, i| {
@@ -64,33 +82,27 @@ pub fn htmlEscapeEncoder(
 }
 
 fn isEntity(slice: []const u8) bool {
-    if (slice.len < 3) return false; // Minimum entity length is 3, like "&a;"
-    if (slice[0] != '&') return false;
+    // Minimum entity length is 3, like "&a;"
+    if (slice.len < 3) return false;
+    std.debug.assert(slice[0] == '&');
 
     var i: usize = 1;
 
     if (slice[i] == '#') {
-        // It's a numeric entity
+        // Could be a numeric.
         i += 1;
         if (i >= slice.len) return false;
-
-        // Check if it's hexadecimal
+        // Hexadecimal?
         if (slice[i] == 'x' or slice[i] == 'X') {
             i += 1;
-            while (i < slice.len and (std.ascii.isHex(slice[i]))) {
-                i += 1;
-            }
+            while (i < slice.len and (std.ascii.isHex(slice[i]))) : (i += 1) {}
         } else {
-            // It's decimal
-            while (i < slice.len and std.ascii.isDigit(slice[i])) {
-                i += 1;
-            }
+            // Could be decimal.
+            while (i < slice.len and std.ascii.isDigit(slice[i])) : (i += 1) {}
         }
     } else {
-        // It's a named entity
-        while (i < slice.len and std.ascii.isAlphabetic(slice[i])) {
-            i += 1;
-        }
+        // Could be a named entity.
+        while (i < slice.len and std.ascii.isAlphabetic(slice[i])) : (i += 1) {}
     }
 
     // Entity must end with a semicolon
@@ -131,4 +143,22 @@ test "htmlEscapeEncoder" {
     defer allocator.free(out_str);
     try std.testing.expectEqual(31, out_amount);
     try std.testing.expectEqualStrings("A &amp; B &lt; C is&nbsp;&gt; D", out_str);
+}
+
+test "HtmlEncodedWriter" {
+    const allocator = std.testing.allocator;
+    var out_array = std.ArrayList(u8).init(allocator);
+    defer out_array.deinit();
+    var array_writer = out_array.writer();
+    const EncodedWriteType = HtmlEncodedWriter(@TypeOf(array_writer));
+    const encodable = "A & B < C is&nbsp;> D";
+    var encoded_writer = EncodedWriteType.init(&array_writer);
+    _ = try encoded_writer.writeEncode(encodable);
+    const out_encoded = try out_array.toOwnedSlice();
+    defer allocator.free(out_encoded);
+    try std.testing.expectEqualStrings("A &amp; B &lt; C is&nbsp;&gt; D", out_encoded);
+    _ = try encoded_writer.write(encodable);
+    const out_literal = try out_array.toOwnedSlice();
+    defer allocator.free(out_literal);
+    try std.testing.expectEqualStrings(encodable, out_literal);
 }
