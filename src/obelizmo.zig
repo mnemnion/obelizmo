@@ -239,23 +239,6 @@ pub fn MarkedString(Kind: type) type {
 
         //| Writing
 
-        pub const StreamOption = enum {
-            skip_on_zero_width,
-            include_zero_width,
-        };
-
-        pub fn writeAsStream(
-            marker: *const SMark,
-            writer: anytype,
-            markups: MarkupArray,
-        ) @TypeOf(writer.*).Error!usize {
-            return marker.writeAsStreamWithOptions(
-                writer,
-                markups,
-                .skip_on_zero_width,
-            );
-        }
-
         fn cloneQueue(queue: MarkQueue) error{OutOfMemory}!MarkQueue {
             const nu_q_slice = try queue.allocator.alloc(Mark, queue.items.len);
             @memcpy(nu_q_slice, queue.items);
@@ -270,18 +253,18 @@ pub fn MarkedString(Kind: type) type {
         const LEFT: usize = 0;
         const RIGHT: usize = 1;
 
-        /// Write out the marked string as a stream: this is designed to
-        /// work with protocols like ANSI terminal sequences, where the
-        /// style signaling is in-band, and has to be repeated in order
-        /// for nested regions to print correctly.  If emitting a tree-
-        /// shaped markup syntax, such as XML or HTML, use `writeAsTree`.
-        pub fn writeAsStreamWithOptions(
+        /// Write the MarkedString to the given writer as a stream.
+        /// re-starting any outer style once an inner style is closed,
+        /// as is helpful, specifically, when writing to the terminal.
+        pub fn writeAsStream(
             marker: *const SMark,
             writer: anytype,
             markups: MarkupArray,
-            option: StreamOption,
         ) @TypeOf(writer.*).Error!usize {
-            const no_zero = option == .skip_on_zero_width;
+            // TODO should be able to use comptime here to detect if the writer
+            // has a decl for `writeEncode` and select it for a local writeBody
+            // function if it does.
+            //
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
@@ -317,28 +300,7 @@ pub fn MarkedString(Kind: type) type {
                 }
                 cursor = next_idx;
                 if (from_this_mark) {
-                    // First we need to close the out mark, if there is one
-                    if (maybe_next) |next| {
-                        if (next.final() > mark.offset) {
-                            if (!no_zero or (no_zero and next.offset < cursor)) {
-                                const right = markups.get(next.kind)[RIGHT];
-                                count += try writer.write(right);
-                            }
-                        }
-                    }
                     // Write our bookend.
-                    // We might have a zero-width to skip though:
-                    if (no_zero) {
-                        const maybe_next_next = in_q.peek();
-                        if (maybe_next_next) |next| {
-                            if (next.offset == mark.offset) {
-                                // Push the mark, but don't write it
-                                try out_q.add(mark);
-                                this_mark = in_q.remove();
-                                continue :marking;
-                            }
-                        }
-                    }
                     const left = markups.get(mark.kind)[LEFT];
                     count += try writer.write(left);
                     // Enplace on the out queue.
@@ -354,8 +316,12 @@ pub fn MarkedString(Kind: type) type {
                     // Now stream the left mark from the next on-queue, if any.
                     const maybe_left_mark = out_q.peek();
                     if (maybe_left_mark) |left_mark| {
-                        if (no_zero and left_mark.final() == cursor) {
+                        if (left_mark.final() == cursor) {
+                            // Skip the opening mark
                             _ = out_q.remove();
+                            // Write the closing mark;
+                            const next_right = markups.get(left_mark.kind)[RIGHT];
+                            count += try writer.write(next_right);
                         } else {
                             const left = markups.get(left_mark.kind)[LEFT];
                             count += try writer.write(left);
@@ -636,7 +602,7 @@ test "MarkedString writeAsStream writeAsTree" {
     try oh.snap(
         @src(),
         \\[]u8
-        \\  "<r>red</r> <b>blue</b><t> </t><g>green</g> <y>yellow</y>"
+        \\  "<r>red</r> <t><b>blue</b><t> <g>green</g></t> <y>yellow</y>"
         ,
     ).expectEqual(stream_string);
     var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(stream_writer)).init(&stream_writer);
@@ -674,7 +640,7 @@ test "MarkedString regex" {
     try oh.snap(
         @src(),
         \\[]u8
-        \\  "<r>func</r> <b>10</b> <r>f</r><y>u</y><r>nky</r> <b>456</b>"
+        \\  "<r>func</r> <b>10</b> <r>f<y>u</y><r>nky</r> <b>456</b>"
         ,
     ).expectEqual(stream_string);
     var wrapped_writer = encoded_writer.DefaultEncodedWriter(@TypeOf(writer)).init(&writer);
