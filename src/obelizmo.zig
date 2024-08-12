@@ -6,6 +6,10 @@ const Order = std.math.Order;
 
 const encoded_writer = @import("encoded_writer.zig");
 
+pub const EncodedWriter = encoded_writer.EncodedWriter;
+pub const HtmlEncodedWriter = encoded_writer.HtmlEncodedWriter;
+pub const DefaultEncodedWriter = encoded_writer.DefaultEncodedWriter;
+
 pub fn MarkedString(Kind: type) type {
     switch (@typeInfo(Kind)) {
         .Enum => {},
@@ -362,6 +366,12 @@ pub fn MarkedString(Kind: type) type {
             writer: anytype,
             markups: MarkupArray,
         ) @TypeOf(writer.*).Error!usize {
+            // See if there's a writeEncode function.
+            const WriteT = @TypeOf(writer.*);
+            const writeBody = if (@hasDecl(WriteT, "writeEncode"))
+                WriteT.writeEncode
+            else
+                WriteT.write;
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
@@ -393,7 +403,7 @@ pub fn MarkedString(Kind: type) type {
                 };
                 // Write up to our next obelus
                 if (cursor < next_idx) {
-                    count += try writer.writeEncode(string[cursor..next_idx]);
+                    count += try writeBody(writer, string[cursor..next_idx]);
                 }
                 cursor = next_idx;
                 if (from_this_mark) {
@@ -417,13 +427,13 @@ pub fn MarkedString(Kind: type) type {
             // There may still be marks on the out queue to drain
             while (out_q.removeOrNull()) |out_mark| {
                 const slice_end = out_mark.final();
-                count += try writer.writeEncode(string[cursor..slice_end]);
+                count += try writeBody(writer, string[cursor..slice_end]);
                 cursor = slice_end;
                 const right = markups.get(out_mark.kind)[RIGHT];
                 count += try writer.write(right);
             }
             // Write the rest of the string, if any
-            count += try writer.writeEncode(string[cursor..]);
+            count += try writeBody(writer, string[cursor..]);
 
             return count;
         }
