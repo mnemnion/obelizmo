@@ -40,11 +40,12 @@ pub fn MarkedString(Kind: type) type {
         /// up and using this type, see `std.enums.EnumArray`.
         pub const MarkupArray = std.enums.EnumArray(Kind, [2][]const u8);
 
-        /// Queue for applying `Marks`.
-        const MarkQueue = PriorityQueue(Mark, void, compare);
+        /// Queue for applying `Mark`s, type of the .queue field of a
+        /// `MarkedString`.
+        pub const MarkQueue = PriorityQueue(Mark, void, compare);
 
         /// Queue for writing `Marks`.
-        const OutQueue = PriorityQueue(Mark, void, compareEnds);
+        pub const OutQueue = PriorityQueue(Mark, void, compareEnds);
 
         //| Allocate and Free
 
@@ -102,6 +103,24 @@ pub fn MarkedString(Kind: type) type {
             try marker.queue.add(the_mark);
         }
 
+        /// Mark the slice `string[start..end]` with the provided `mark`.
+        /// Asserts that the bounds provided form a valid slice of the
+        /// string.
+        pub fn markSliceUnchecked(
+            marker: *SMark,
+            mark: Kind,
+            start: usize,
+            end: usize,
+        ) error{OutOfMemory}!void {
+            assert(start < end and end <= marker.string.len);
+            const the_mark = Mark{
+                .kind = mark,
+                .offset = @intCast(start),
+                .len = @intCast(end - start),
+            };
+            try marker.queue.add(the_mark);
+        }
+
         /// Mark `len` bytes of the string starting from `offset`.
         pub fn markFrom(
             marker: *SMark,
@@ -119,6 +138,24 @@ pub fn MarkedString(Kind: type) type {
             try marker.queue.add(the_mark);
         }
 
+        /// Mark `len` bytes of the string starting from `offset`.
+        /// Asserts that the provided values are within the bounds
+        /// of the string.
+        pub fn markFromUnchecked(
+            marker: *SMark,
+            mark: Kind,
+            offset: usize,
+            len: usize,
+        ) error{OutOfMemory}!void {
+            assert(offset + len <= marker.string.len);
+            const the_mark = Mark{
+                .kind = mark,
+                .offset = @intCast(offset),
+                .len = @intCast(len),
+            };
+            try marker.queue.add(the_mark);
+        }
+
         /// Find `needle` in string and mark with `mark`.  Returns the
         /// index if the needle was found and marked, otherwise `null`.
         pub fn findAndMark(
@@ -128,12 +165,7 @@ pub fn MarkedString(Kind: type) type {
         ) error{OutOfMemory}!?usize {
             const idx = std.mem.indexOf(u8, marker.string, needle);
             if (idx) |i| {
-                marker.markFrom(mark, i, needle.len) catch |e| {
-                    switch (e) {
-                        error.OutOfMemory => |err| return err,
-                        else => unreachable,
-                    }
-                };
+                try marker.markFromUnchecked(mark, i, needle.len);
             }
             return idx;
         }
@@ -149,7 +181,7 @@ pub fn MarkedString(Kind: type) type {
         ) error{OutOfMemory}!?usize {
             const idx = std.mem.indexOfPos(u8, marker.string, pos, needle);
             if (idx) |i| {
-                try marker.markFrom(mark, i, needle.len);
+                try marker.markFromUnchecked(mark, i, needle.len);
             }
             return idx;
         }
@@ -164,12 +196,7 @@ pub fn MarkedString(Kind: type) type {
         ) error{OutOfMemory}!bool {
             const idx = std.mem.lastIndexOf(u8, marker.string, needle);
             if (idx) |i| {
-                marker.markFrom(mark, i, needle.len) catch |e| {
-                    switch (e) {
-                        error.OutOfMemory => |err| return err,
-                        else => unreachable,
-                    }
-                };
+                try marker.markFromUnchecked(mark, i, needle.len);
             }
             return idx;
         }
@@ -184,12 +211,7 @@ pub fn MarkedString(Kind: type) type {
         ) error{OutOfMemory}!?usize {
             const maybe_match = regex.match(marker.string);
             if (maybe_match) |match| {
-                marker.markSlice(mark, match.start, match.end) catch |e| {
-                    switch (e) {
-                        error.OutOfMemory => |err| return err,
-                        else => unreachable,
-                    }
-                };
+                try marker.markSliceUnchecked(mark, match.start, match.end);
                 return match.start;
             } else {
                 return null;
@@ -207,12 +229,7 @@ pub fn MarkedString(Kind: type) type {
         ) error{OutOfMemory}!?usize {
             const maybe_match = regex.matchPos(pos, marker.string);
             if (maybe_match) |match| {
-                marker.markSlice(mark, match.start, match.end) catch |e| {
-                    switch (e) {
-                        error.OutOfMemory => |err| return err,
-                        else => unreachable,
-                    }
-                };
+                try marker.markSliceUnchecked(mark, match.start, match.end);
                 return match.start;
             } else {
                 return null;
@@ -231,12 +248,7 @@ pub fn MarkedString(Kind: type) type {
             var a_match = false;
             while (matcher.next()) |match| {
                 a_match = true;
-                marker.markSlice(mark, match.start, match.end) catch |e| {
-                    switch (e) {
-                        error.OutOfMemory => |err| return err,
-                        else => unreachable,
-                    }
-                };
+                try marker.markSliceUnchecked(mark, match.start, match.end);
             }
             return a_match;
         }
@@ -265,10 +277,12 @@ pub fn MarkedString(Kind: type) type {
             writer: anytype,
             markups: MarkupArray,
         ) @TypeOf(writer.*).Error!usize {
-            // TODO should be able to use comptime here to detect if the writer
-            // has a decl for `writeEncode` and select it for a local writeBody
-            // function if it does.
-            //
+            // See if there's a writeEncode function.
+            const WriteT = @TypeOf(writer.*);
+            const writeBody = if (@hasDecl(WriteT, "writeEncode"))
+                WriteT.writeEncode
+            else
+                WriteT.write;
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
@@ -300,7 +314,7 @@ pub fn MarkedString(Kind: type) type {
                 };
                 // Write up to our next obelus
                 if (cursor < next_idx) {
-                    count += try writer.write(string[cursor..next_idx]);
+                    count += try writeBody(writer.*, string[cursor..next_idx]);
                 }
                 cursor = next_idx;
                 if (from_this_mark) {
@@ -337,7 +351,7 @@ pub fn MarkedString(Kind: type) type {
             // There may still be marks on the out queue to drain
             while (out_q.removeOrNull()) |out_mark| {
                 const slice_end = out_mark.final();
-                count += try writer.write(string[cursor..slice_end]);
+                count += try writeBody(writer.*, string[cursor..slice_end]);
                 cursor = slice_end;
                 const right = markups.get(out_mark.kind)[RIGHT];
                 count += try writer.write(right);
@@ -348,7 +362,7 @@ pub fn MarkedString(Kind: type) type {
                 }
             }
             // Write the rest of the string, if any
-            count += try writer.write(string[cursor..]);
+            count += try writeBody(writer.*, string[cursor..]);
 
             return count;
         }
@@ -403,7 +417,7 @@ pub fn MarkedString(Kind: type) type {
                 };
                 // Write up to our next obelus
                 if (cursor < next_idx) {
-                    count += try writeBody(writer, string[cursor..next_idx]);
+                    count += try writeBody(writer.*, string[cursor..next_idx]);
                 }
                 cursor = next_idx;
                 if (from_this_mark) {
@@ -427,13 +441,13 @@ pub fn MarkedString(Kind: type) type {
             // There may still be marks on the out queue to drain
             while (out_q.removeOrNull()) |out_mark| {
                 const slice_end = out_mark.final();
-                count += try writeBody(writer, string[cursor..slice_end]);
+                count += try writeBody(writer.*, string[cursor..slice_end]);
                 cursor = slice_end;
                 const right = markups.get(out_mark.kind)[RIGHT];
                 count += try writer.write(right);
             }
             // Write the rest of the string, if any
-            count += try writeBody(writer, string[cursor..]);
+            count += try writeBody(writer.*, string[cursor..]);
 
             return count;
         }

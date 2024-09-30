@@ -4,6 +4,10 @@ This library provides a flexible system for marking up text, a practice referred
 
 The goal of `obelizmo` is to provide a performant and output-agnostic way to mark up a string, keeping the metadata and the text separate.  A claim like "output-agnostic" always has its limits: `obelizmo` in its present state is a capable obelist of ANSI escape sequences and HTML, and the mechanism provided is, perhaps, general enough to accomodate other formats as well.
 
+## Status
+
+This library is in the proof-of-concept stage.  I'm reasonably happy with the structure of the marked strings, and the collection of methods for marking them is acceptably featureful.  Printing is another story.  I have a preliminary implementation, which is good enough to be useful, but I expect to iterate on a solid solution for awhile.  You'll find a more detailed discussion of the status quo in a later section.
+
 ## Marking Strings
 
 To use the library, define an `enum` of all the categories of markup you intend to use.  A simple example:
