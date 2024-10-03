@@ -1081,7 +1081,7 @@ const reg_a = Regex.compile("aaa.*?aaa").?;
 const reg_1 = Regex.compile("111.*?111").?;
 const reg_paren = Regex.compile("\\(.*?\\)").?;
 const reg_dash = Regex.compile("---.*?---").?;
-const reg_bar = Regex.compile("|||.*?|||").?;
+const reg_bar = Regex.compile("\\|\\|\\|.*?\\|\\|\\|").?;
 
 test "XLine" {
     const allocator = std.testing.allocator;
@@ -1101,10 +1101,13 @@ test "XLine" {
     _ = try marked.findAndMark(.blue, "foo bar baz");
     _ = try marked.findAndMark(.inverse, "uu");
     _ = try marked.findAndMark(.green, "quux");
+    _ = try marked.findAndMark(.super_magenta, "!!!");
+    _ = try marked.matchAndMark(.bg_grey69, reg_bar);
+    _ = try marked.matchAndMark(.dashed_orange1, reg_dash);
     defer xprint.deinit();
-    while (try xprint.next()) |more| {
+    while (try xprint.next()) |_| {
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
-        std.debug.print("{s} {}\n", .{ line, more });
+        std.debug.print("{s}\n", .{line});
     }
 }
