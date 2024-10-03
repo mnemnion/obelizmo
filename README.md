@@ -6,7 +6,7 @@ The goal of `obelizmo` is to provide a performant and output-agnostic way to mar
 
 ## Status
 
-This library is in the proof-of-concept stage.  I'm reasonably happy with the structure of the marked strings, and the collection of methods for marking them is acceptably featureful.  Printing is another story.  I have a preliminary implementation, which is good enough to be useful, but I expect to iterate on a solid solution for awhile.  You'll find a more detailed discussion of the status quo in a later section.
+This library is in the proof-of-concept stage.  I'm reasonably happy with the structure of the marked strings, and the collection of methods for marking them is acceptably featureful.  Printing with ANSI/SGR is fully implemented, with proper handling of nested regions and a color builder.  Printing in HTML is... possible, and might be good enough for your purposes.  I have a long-term goal to come up with a really nice solution there, but it wasn't the primary area of focus.
 
 ## Marking Strings
 
@@ -45,7 +45,9 @@ A collection of member functions for marking up strings is provided.  Some of th
 
 Marks may be provided in any order. They're stored on a [priority queue](https://ziglang.org/documentation/master/std/#std.priority_queue.PriorityQueue), which has predicable and good algorithmic complexity for this purpose.
 
-Usage note: be aware that marks can overlap each other, and this may give undesired results, depending on how you choose to print the marked string.  No attempt is made to correct for this condition, or compensate for it.  Among other reasons, this is because there are real uses for which overlapping marks are correct.
+Usage note: be aware that marks can overlap each other, and this may give undesired results, depending on how you choose to print the marked string.  No attempt is made to correct for this condition, or compensate for it.  Among other reasons, this is because there are real uses for which overlapping marks are correct.  The terminal printer handles this with aplomb, but if you wish to produce valid HTML, you'll need the marks to properly nest.
+
+Also worth knowing: if you mark a single region repeatedly, the lower-valued enum will print first on entry, and last on exit.
 
 ### Direct Marking
 
@@ -76,7 +78,7 @@ _ = try string_marker.findAndMarkLast(.yellow, "line");
 
 ### Match and Mark
 
-The last way to apply marks is by using an [mvzr Regex](https://github.com/mnemnion/mvzr), or several.  These functions are actually type-generic, so anything which precisely matches the interface and field names used in `mvzr` would suffice.  But so far as I'm aware, that list only includes `mvzr` at the present time.
+The last way to apply marks is by using an [mvzr Regex](https://github.com/mnemnion/mvzr), or several.  These functions are actually type-generic, so anything which precisely matches the interface and field names used in `mvzr` would suffice.  But so far as I'm aware, that list only includes `mvzr` at the present time.  The main reason for this is that `mvzr` statically allocates Regexen, so the structs themselves are comptime-generic by size.
 
 ```zig
 const number_regex = mvzr.Regex.compile("\\d+").?;
@@ -95,14 +97,31 @@ That's it for marking methods.  If you have some complex structure, like an abst
 
 ### Printing
 
-Once your `MarkedString` is marked, you'll probably want to print it to something, or potentially several somethings.  `obelizmo` provides for a couple of approaches to this.  More complex printing is being contemplated, but what we have now is quite capable for many purposes, and how to accomodate more use cases remains to be seen.
+Once your `MarkedString` is marked, you'll probably want to print it to something, or potentially several somethings.  `obelizmo` provides for a couple of approaches to this.
 
-The basic distinction is between formats which use in-band signaling for styling, and those which build a tree-like structure.  I won't be coy here: the goal is to be able to print [ANSI escape codes](https://en.wikipedia.org/wiki/ANSI_escape_code) and [HTML Markup](https://en.wikipedia.org/wiki/HTML) from a single canonical source, and this has been the focus so far.
+The simpler printer uses `marked_string.writeAsTree(writer, markups)`, where the second parameter is a `MarkupStringArray`. This is an [EnumArray](https://ziglang.org/documentation/master/std/#std.enums.EnumArray) where the value type is `[2][]const u8`, for the beginning and end of the region marked with a given enum.  Suitably loaded with the right tags, and given that the `MarkedString` has the right shape, this can produce acceptable HTML.
 
-These are handled using `marked_string.writeStream(writer)` and marked_string.writeTree(encoded_writer)`, respectively.
+HTML body text needs to be escaped, for which you can use `HTMLEncodedWriter`, wrapping the underlying Writer of your choice.
 
 ### Printing A MarkedString to the Terminal
 
 This use case was the real motivation for this project, and the fully-supported one, so we'll focus there.
 
-The marks are just marks: a struct holding the provided enum, as well as the boundaries of the text region in `[offset, length]` form.
+The marks are just marks: a struct holding the provided enum, as well as the boundaries of the text region in `[offset, length]` form.  To print to the terminal, you'll need to create `Color`s, and a `MarkupColorArray`, this is another `EnumArray` where the value is `Color`.
+
+Next, create an `XtermLinePrinter` specialized to the Writer for the terminal.  Initialize with `init` and call `next`:
+
+```zig
+const xprint = XtermPrinter.init(&marked_string, markup_array, writer);
+defer xprint.deinit();
+
+while (try xprint.next()) |more| {
+    // `more` is true until the final line
+    // Newlines are not printed, for terminal raw-mode reasons,
+    // So this is where you place the cursor where you want it.
+    // When complete, next() will return null.
+}
+```
+Foreground, background, and underline colors, are kept on separate stacks, and will restart automatically at the end of any given marked region.  You can keep the `xprint` around for later, and provide a fresh `MarkedString` with `xprint.newText(&marked_string)`.
+
+That's Obeli⚡️mo.  Mark a string, print it.
