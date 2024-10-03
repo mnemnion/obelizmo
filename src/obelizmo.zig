@@ -283,10 +283,12 @@ pub fn MarkedString(Kind: type) type {
         /// complete.
         ///
         /// Calling next() will return a boolean, until after the last
-        /// line is printed, after which it will be `null`.  You may or
-        /// may not wish to print a final newline, whether or not the
-        /// text happens to have one, so after the last line is complete,
-        /// the value will be `false`.
+        /// line is printed, after which it will be `null`.  The return
+        /// value will be `true` until the last line, when it becomes
+        /// `false`; this will happen whether or not a string has a
+        /// terminal newline, since whether or a not a TUI wants a final
+        /// newline is broadly independent of whether or not the string
+        /// happens to have one.
         ///
         /// This is a fairly 'heavy' structure, which you may prefer to
         /// reuse: calling `line_writer.newText(&marked_string)` will
@@ -340,7 +342,7 @@ pub fn MarkedString(Kind: type) type {
                 /// include the MarkedString or MarkupColorArray.
                 pub fn deinit(xprint: *XLine) void {
                     const alloc = xprint.marker.queue.allocator;
-                    xprint.in_q.deinit();
+                    if (xprint.state != .initial) xprint.in_q.deinit();
                     xprint.out_q.deinit();
                     xprint.fgs.deinit(alloc);
                     xprint.bgs.deinit(alloc);
@@ -369,8 +371,8 @@ pub fn MarkedString(Kind: type) type {
                     xprint.this_mark = null;
                 }
 
-                /// Because this needs to restart, we need to create a
-                /// classic transformation from loop to state machine.
+                /// Because this needs to restart, we base it around a
+                /// classic state machine.
                 ///
                 /// These are those states:
                 const PrintState = enum {
