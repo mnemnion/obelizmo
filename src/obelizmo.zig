@@ -381,16 +381,17 @@ pub fn MarkedString(Kind: type) type {
         /// complete.
         ///
         /// Calling next() will return a boolean, until after the last
-        /// line is printed, after which it will be `null`  You may or
+        /// line is printed, after which it will be `null`.  You may or
         /// may not wish to print a final newline, whether or not the
         /// text happens to have one, so after the last line is complete,
-        /// This value will be `false`.
+        /// the value will be `false`.
         ///
         /// This is a fairly 'heavy' structure, which you may prefer to
         /// reuse: calling `line_writer.newText(&marked_string)` will
         /// replace the marked string and reset all necessary state.
         /// Call `line_writer.deinit()` to free all allocated memory,
-        /// this will not include the MarkedString itself.
+        /// this will not include the MarkedString itself.  The allocator
+        /// itself is reused from the MarkedString.
         pub fn XtermLineWriter(
             Writer: type,
         ) type {
@@ -398,6 +399,8 @@ pub fn MarkedString(Kind: type) type {
                 writer: Writer,
                 marker: *const SMark,
                 markups: MarkupColorArray,
+                // The remaining fields are internal, and should
+                // not be considered stable API
                 in_q: MarkQueue,
                 out_q: OutQueue,
                 fgs: ArrayListUnmanaged(Mark),
@@ -461,66 +464,33 @@ pub fn MarkedString(Kind: type) type {
                     xprint.this_mark = null;
                 }
 
-                // Because this needs to restart, we need to create a
-                // classic transformation from loop to state machine.
-                //
-                // What are the states?
-                //
-                // - Print-in-clear: before the first mark, and after
-                //   the last out mark
-                // - write-to-this: printing up to the end of this_mark
-                // - write-to-out: printing up to the end of next_mark
-                // - out-marks: draining the out mark queue
-                //
-                // So:
-                //
-                // A) Print everything before the first mark. State is
-                // .print_to_first
-                //
-                // B) Print the printOn of the first mark, push it onto
-                // the stack for its kind, put it in the out queue.
-                //
-                // C) Pull this_mark. Peek the out queue. If next_mark
-                // is before the next out, set .write_this, otherwise
-                // set .write_next.  Print what's between.
-                //
-                // If .write_this, execute B).
-                //
-                // If .write_next, pull off the out queue. If it's
-                // stackable, it must be on top of its stack: remove.
-                // Take the style beneath and printOn.
-                //
-                // Calculate the next index and set the state accordingly.
-                //
-                // When the in queue is drained, we're in .drain_out. Just
-                // write until next_index, pull from out queue, pop stack,
-                // write continuation, until out_queue is drained.
-                //
-                // Now it's .print_to_last: keep printing until everything
-                // is done.  State is .final. The state .final returns null.
-                //
-                // Thus:
+                /// Because this needs to restart, we need to create a
+                /// classic transformation from loop to state machine.
+                ///
+                /// These are those states:
                 const PrintState = enum {
                     initial,
                     this_mark,
-                    write_this,
-                    write_next,
+                    write_to_this,
+                    write_to_next,
                     next_mark,
                     drain,
                     last,
                     final,
                 };
 
-                pub fn next(xprint: *XLine) !bool {
+                /// Print the next line.  Returns `true` until there are
+                /// no more lines to print, then `false`.  Subsequent calls
+                /// will return `null`.
+                pub fn next(xprint: *XLine) !?bool {
                     var more: bool = true;
                     while (more) {
                         switch (xprint.state) {
                             .initial => more = try xprint.setup(),
                             .this_mark => more = try xprint.printThisMark(),
-                            .write_this => more = try xprint.writeToThis(),
-                            .write_next => more = try xprint.writeToNext(),
+                            .write_to_this => more = try xprint.writeToThis(),
+                            .write_to_next => more = try xprint.writeToNext(),
                             .next_mark => more = try xprint.printNextMark(),
-                            .drain => more = try xprint.drainOutQueue(),
                             .last => more = try xprint.printLast(),
                             .final => return null,
                         }
@@ -536,7 +506,7 @@ pub fn MarkedString(Kind: type) type {
                     const maybe_mark = xprint.in_q.removeOrNull();
                     if (maybe_mark) |mark| {
                         xprint.this_mark = mark;
-                        xprint.state = .write_this;
+                        xprint.state = .write_to_this;
                         xprint.next_index = mark.offset;
                     } else {
                         xprint.state = .last;
@@ -550,45 +520,42 @@ pub fn MarkedString(Kind: type) type {
                 // one for printing "on" and two for printing
                 // "off".  Meanwhile redundant SGR is harmless.
                 fn printThisMark(xprint: *XLine) !bool {
-                    if (xprint.this_mark) |mark| {
-                        const this_color = xprint.markups.get(mark.kind);
-                        try this_color.printOn(xprint.writer);
-                        // Push to correct stack
-                        switch (this_color.style()) {
-                            .style => {},
-                            .foreground => {
-                                try xprint.fgs.append(xprint.allocator(), mark);
-                            },
-                            .background => {
-                                try xprint.bgs.append(xprint.allocator(), mark);
-                            },
-                            .underline => {
-                                try xprint.uls.append(xprint.allocator(), mark);
-                            },
-                        }
-                        // Append to out queue
-                        try xprint.out_q.add(mark);
-                        // Safety: we just added to the queue, so this
-                        // always succeeds:
-                        const next_mark = xprint.out_q.peek().?;
-                        // Pull next mark
-                        xprint.this_mark = xprint.in_q.removeOrNull();
-                        if (xprint.this_mark) |this| {
-                            if (this.offset <= next_mark.final()) {
-                                xprint.state = .write_this;
-                                xprint.next_index = this.offset;
-                            } else {
-                                xprint.state = .write_next;
-                                xprint.next_index = next_mark.final();
-                            }
+                    // Safety: `this_mark` is populated every time this
+                    // state is reached.
+                    const mark = xprint.this_mark.?;
+                    const this_color = xprint.markups.get(mark.kind);
+                    try this_color.printOn(xprint.writer);
+                    // Push to correct stack
+                    switch (this_color.style()) {
+                        .style => {},
+                        .foreground => {
+                            try xprint.fgs.append(xprint.allocator(), mark);
+                        },
+                        .background => {
+                            try xprint.bgs.append(xprint.allocator(), mark);
+                        },
+                        .underline => {
+                            try xprint.uls.append(xprint.allocator(), mark);
+                        },
+                    }
+                    // Append to out queue
+                    try xprint.out_q.add(mark);
+                    // Safety: we just added to the queue, so this
+                    // always succeeds:
+                    const next_mark = xprint.out_q.peek().?;
+                    // Pull next mark
+                    xprint.this_mark = xprint.in_q.removeOrNull();
+                    if (xprint.this_mark) |this| {
+                        if (this.offset <= next_mark.final()) {
+                            xprint.state = .write_to_this;
+                            xprint.next_index = this.offset;
                         } else {
+                            xprint.state = .write_to_next;
                             xprint.next_index = next_mark.final();
-                            xprint.state = .drain;
                         }
                     } else {
-                        // Safety: `this_mark` is populated except for the `.drain`
-                        // and `.last` states.
-                        unreachable;
+                        xprint.state = .write_to_next;
+                        xprint.next_index = next_mark.final();
                     }
                     return true;
                 }
@@ -647,39 +614,31 @@ pub fn MarkedString(Kind: type) type {
                         },
                     }
                     // Determine following state and index.
-                    // .drain uses this function, so these can both be null:
+                    // These can both be null:
                     const maybe_this = xprint.this_mark;
                     const maybe_next = xprint.out_q.peek();
                     if (maybe_next) |next_after| {
                         if (maybe_this) |this_mark| {
                             if (this_mark.offset <= next_after.final()) {
-                                xprint.state = .write_this;
+                                xprint.state = .write_to_this;
                                 xprint.next_index = this_mark.offset;
                             } else {
-                                xprint.state = .write_next;
+                                xprint.state = .write_to_next;
                                 xprint.next_index = next_after.final();
                             }
                         } else {
-                            // TODO: maybe drain is redundant?
-                            xprint.state = .drain;
+                            xprint.state = .write_to_next;
                             xprint.next_index = next_after.final();
                         }
                     } else {
                         if (maybe_this) |this_mark| {
-                            xprint.state = .write_this;
+                            xprint.state = .write_to_this;
                             xprint.next_index = this_mark.offset;
                         } else {
                             xprint.state = .last;
                             xprint.next_index = xprint.marker.string.len;
                         }
                     }
-                    return true;
-                }
-
-                fn drainOutQueue(xprint: *XLine) !bool {
-                    const did_line = try xprint.printUpTo();
-                    if (did_line) return false;
-                    xprint.state = .write_next;
                     return true;
                 }
 
@@ -699,11 +658,11 @@ pub fn MarkedString(Kind: type) type {
                     while (xprint.cursor < xprint.next_index) : (xprint.cursor += 1) {
                         const b = xprint.marker.string[xprint.cursor];
                         if (b == '\n' or b == '\r') {
-                            try xprint.writer.write(xprint.marker.string[start..xprint.cursor]);
-                            const n = if (xprint.cursor + 1 < xprint.marker.string.len)
+                            _ = try xprint.writer.writeAll(xprint.marker.string[start..xprint.cursor]);
+                            const n: u8 = if (xprint.cursor + 1 < xprint.marker.string.len)
                                 xprint.marker.string[xprint.cursor + 1]
                             else
-                                '!'; // random sentinel
+                                '!'; // just a sentinel
                             // Safety: we ensure that next_index is never greater than
                             // the string length, so when these go beyond bounds, we
                             // cannot reach this code path.
@@ -714,17 +673,20 @@ pub fn MarkedString(Kind: type) type {
                             }
                             return true;
                         }
-                    }
-                    try xprint.writer.write(xprint.marker.string[start..xprint.cursor]);
+                    } // If we exceeded the index (due to the logic above), then this is empty:
+                    _ = try xprint.writer.writeAll(xprint.marker.string[start..xprint.cursor]);
                     return false;
                 }
 
+                /// Remove the mark from the ArrayList stack.  Mark must be present.
                 fn removeMarkFrom(mark_list: ArrayListUnmanaged(Mark), mark: Mark) void {
                     const marks = mark_list.items;
                     var idx = marks.len - 1;
                     while (idx >= 0) : (idx -= 1) {
                         const a_mark = marks[idx];
                         if (std.meta.eql(a_mark, mark)) break;
+                        // Rather than panic on underflow:
+                        if (idx == 0) @panic("mark not found in its stack");
                     }
                     const removed = mark_list.orderedRemove(idx);
                     assert(std.meta.eql(removed, mark));
