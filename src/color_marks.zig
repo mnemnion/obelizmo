@@ -6,9 +6,10 @@
 //! `.style`.  The style class of a Color may be determined by calling
 //! `a_color.style()`.
 //!
-//! `.style` is only invisible and inverse, where it doesn't make sense
-//! to specify a foreground color to go with them.  These may be created
-//! with the functions `invisible` and `inverse`.
+//! `.style` is a catch-all containing `.invisible`, `.inverse`, and
+//! `.reset`.  These are stylings where it doesn't make sense to include
+//! a color.  `.reset` is a pseudo-style which resets all presentation
+//! values, the foreground, and the background, to their defaults.
 //!
 //! `.background` and `.underline` take ColorValues, which can be the
 //! default color, a simple color (the original set), a 256 palette
@@ -239,10 +240,16 @@ pub fn invisible() Color {
     return .invisible;
 }
 
+/// Create a reset style.
+pub fn reset() Color {
+    return .reset;
+}
+
 pub const ColorAttribute = enum {
     underline,
     inverse,
     invisible,
+    reset,
     superscript,
     subscript,
     foreground,
@@ -328,17 +335,19 @@ pub const ColorValue = union(enum(u2)) {
     }
 };
 
+pub const TextStyles = packed struct {
+    bold: bool = false,
+    faint: bool = false,
+    italic: bool = false,
+    blink: bool = false,
+    rapid_blink: bool = false,
+    strikethrough: bool = false,
+    overline: bool = false,
+};
+
 pub const ForegroundColor = struct {
     color: ?ColorValue,
-    styles: packed struct {
-        bold: bool = false,
-        faint: bool = false,
-        italic: bool = false,
-        blink: bool = false,
-        rapid_blink: bool = false,
-        strikethrough: bool = false,
-        overline: bool = false,
-    } = .{},
+    styles: TextStyles = .{},
 
     pub fn printOn(fg: ForegroundColor, writer: anytype) @TypeOf(writer.*).Error!void {
         if (fg.styles.bold) _ = try writer.writeAll("\x1b[1m");
@@ -428,6 +437,7 @@ pub const Color = union(ColorAttribute) {
     underline: ColorValue,
     inverse,
     invisible,
+    reset,
     superscript: ForegroundColor,
     subscript: ForegroundColor,
     foreground: ForegroundColor,
@@ -443,6 +453,7 @@ pub const Color = union(ColorAttribute) {
             .underline => _ = try writer.writeAll("\x1b[4m"),
             .inverse => _ = try writer.writeAll("\x1b[7m"),
             .invisible => _ = try writer.writeAll("\x1b[8m"),
+            .reset => _ = try writer.writeAll("\x1b[0m"),
             .superscript => _ = try writer.writeAll("\x1b[73m"),
             .subscript => _ = try writer.writeAll("\x1b[74m"),
             .foreground => {},
@@ -460,7 +471,7 @@ pub const Color = union(ColorAttribute) {
         }
         // Write color, proper
         switch (color) {
-            .inverse, .invisible => {},
+            .inverse, .invisible, .reset => {},
             .background => |bg| try bg.printOn(writer),
             .underline,
             .double_underline,
@@ -495,6 +506,7 @@ pub const Color = union(ColorAttribute) {
 
     pub fn printOff(color: Color, writer: anytype) @TypeOf(writer.*).Error!void {
         switch (color) {
+            .reset => {},
             .inverse => _ = try writer.writeAll("\x1b[27m"),
             .invisible => _ = try writer.writeAll("\x1b[28m"),
             .superscript, .subscript => |baseline| {
@@ -527,6 +539,7 @@ pub const Color = union(ColorAttribute) {
             => return .underline,
             .inverse,
             .invisible,
+            .reset,
             => return .style,
             .foreground, .superscript, .subscript => return .foreground,
             .background => return .background,
