@@ -6,7 +6,7 @@ The goal of `obelizmo` is to provide a performant and output-agnostic way to mar
 
 ## Status
 
-This library is in the proof-of-concept stage.  I'm reasonably happy with the structure of the marked strings, and the collection of methods for marking them is acceptably featureful.  Printing with ANSI/SGR is fully implemented, with proper handling of nested regions and a color builder.  Printing in HTML is... possible, and might be good enough for your purposes.  I have a long-term goal to come up with a really nice solution there, but it wasn't the primary area of focus.
+This library is entirely usable at present for its main focus, which is terminal printing.  I'm reasonably happy with the structure of the marked strings, and the collection of methods for marking them is acceptably featureful.  Printing with ANSI/SGR is fully implemented, with proper handling of nested regions and a color builder.  Printing in HTML is... possible, and might be good enough for your purposes.  I have a long-term goal to come up with a really nice solution there, but it wasn't the primary application of interest.
 
 ## Marking Strings
 
