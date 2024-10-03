@@ -6,11 +6,6 @@
 //! `.style`.  The style class of a Color may be determined by calling
 //! `a_color.style()`.
 //!
-//! `.style` is a catch-all containing `.invisible`, `.inverse`, and
-//! `.reset`.  These are stylings where it doesn't make sense to include
-//! a color.  `.reset` is a pseudo-style which resets all presentation
-//! values, the foreground, and the background, to their defaults.
-//!
 //! `.background` and `.underline` take ColorValues, which can be the
 //! default color, a simple color (the original set), a 256 palette
 //! color, or an RGB triple.  These are created with:
@@ -44,6 +39,23 @@
 //!
 //! Calling these modifier functions on any color where `color.style() !=
 //! .foreground` will result in a panic.
+//!
+//! The `.style` class is a catch-all containing `.invisible`, `.inverse`,
+//! and `.reset`.  These are stylings where it doesn't make sense to include
+//! a color, and may be created with `invisible`, `inverse`, and `reset`.
+//!
+//! `.reset` will reset everything.  To make it more specific, you can call
+//! the following modifier functions:
+//!
+//! - `neutral`, `upright`, `steady`, `baseline`, `resetForeground`,
+//!   `resetBackground`, `resetUnderline`, and `resetUnderlineColor`
+//!
+//! The first four being: neither bold nor faint, not italic, not blinking,
+//! not super- or subscripted, respectively.  If any of these modifiers are
+//! called, only the requested resets will be performed.
+//!
+//! Calling `printOff` on a reset Color is a no-op.  As with foreground,
+//! calling any of the above modifier functions on any other color will panic.
 //!
 //! Not every terminal will support all of these options, but unrecognized
 //! codes are ignored, so the worst that can happen is that a style will not
@@ -335,6 +347,33 @@ pub const ColorValue = union(enum(u2)) {
     }
 };
 
+pub const Resets = packed struct {
+    all: bool = true,
+    neutral: bool = false,
+    upright: bool = false,
+    steady: bool = false,
+    baseline: bool = false,
+    foreground: bool = false,
+    background: bool = false,
+    underline: bool = false,
+    underline_color: bool = false,
+
+    pub fn printOn(r: Resets, writer: anytype) !void {
+        if (r.all) {
+            try writer.writeAll("\x1b[0m");
+            return;
+        }
+        if (r.neutral) try writer.writeAll("\x1b[22m");
+        if (r.upright) try writer.writeAll("\x1b[23m");
+        if (r.steady) try writer.writeAll("\x1b[25m");
+        if (r.baseline) try writer.writeAll("\x1b[75m");
+        if (r.foreground) try writer.writeAll("\x1b[39m");
+        if (r.background) try writer.writeAll("\x1b[40m");
+        if (r.underline) try writer.writeAll("\x1b[24m");
+        if (r.underline_color) try writer.writeAll("\x1b[59m");
+    }
+};
+
 pub const TextStyles = packed struct {
     bold: bool = false,
     faint: bool = false,
@@ -437,7 +476,7 @@ pub const Color = union(ColorAttribute) {
     underline: ColorValue,
     inverse,
     invisible,
-    reset,
+    reset: Resets,
     superscript: ForegroundColor,
     subscript: ForegroundColor,
     foreground: ForegroundColor,
@@ -453,7 +492,7 @@ pub const Color = union(ColorAttribute) {
             .underline => _ = try writer.writeAll("\x1b[4m"),
             .inverse => _ = try writer.writeAll("\x1b[7m"),
             .invisible => _ = try writer.writeAll("\x1b[8m"),
-            .reset => _ = try writer.writeAll("\x1b[0m"),
+            .reset => |r| try r.printOn(writer),
             .superscript => _ = try writer.writeAll("\x1b[73m"),
             .subscript => _ = try writer.writeAll("\x1b[74m"),
             .foreground => {},
@@ -509,9 +548,9 @@ pub const Color = union(ColorAttribute) {
             .reset => {},
             .inverse => _ = try writer.writeAll("\x1b[27m"),
             .invisible => _ = try writer.writeAll("\x1b[28m"),
-            .superscript, .subscript => |baseline| {
+            .superscript, .subscript => |base| {
                 _ = try writer.writeAll("\x1b[75m");
-                try baseline.printOff(writer);
+                try base.printOff(writer);
             },
             .foreground => |fg| try fg.printOff(writer),
             .background => |bg| {
@@ -678,6 +717,110 @@ pub const Color = union(ColorAttribute) {
                 return @unionInit(Color, which, styled);
             },
             else => @panic("this Color type cannot take style modifiers"),
+        }
+    }
+
+    /// Add neutral (not bold or faint) modifier to reset style.
+    pub fn neutral(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.neutral = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("neutral may only be set on a reset() color"),
+        }
+    }
+
+    /// Add upright (not italic) modifier to reset style.
+    pub fn upright(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.upright = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("upright may only be set on a reset() color"),
+        }
+    }
+
+    /// Add steady modifier (not blinking) to reset style.
+    pub fn steady(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.steady = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("steady may only be set on a reset() color"),
+        }
+    }
+
+    /// Add baseline (not super- or sub-script) modifier to reset style.
+    pub fn baseline(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.baseline = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("baseline may only be set on a reset() color"),
+        }
+    }
+
+    /// Modify reset style to reset background.
+    pub fn resetBackground(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.background = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("reset background may only be set on a reset() color"),
+        }
+    }
+
+    /// Modify reset style to reset foreground.
+    pub fn resetForeground(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.foreground = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("reset foreground may only be set on a reset() color"),
+        }
+    }
+
+    /// Modify reset style to reset underline.
+    pub fn resetUnderline(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.underline = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("reset underline may only be set on a reset() color"),
+        }
+    }
+
+    /// Modify reset style to reset underline color.
+    pub fn resetUnderlineColor(c: Color) Color {
+        switch (c) {
+            .reset => |r| {
+                var new_r = r;
+                new_r.all = false;
+                new_r.underline_color = true;
+                return Color{ .reset = r };
+            },
+            else => @panic("reset underline color may only be set on a reset() color"),
         }
     }
 };
