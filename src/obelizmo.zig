@@ -392,6 +392,7 @@ pub fn MarkedString(Kind: type) type {
         /// Call `line_writer.deinit()` to free all allocated memory,
         /// this will not include the MarkedString itself.  The allocator
         /// itself is reused from the MarkedString.
+        ///
         pub fn XtermLineWriter(
             Writer: type,
         ) type {
@@ -424,7 +425,8 @@ pub fn MarkedString(Kind: type) type {
                         .writer = writer,
                         .marker = marker,
                         .markups = markups,
-                        .in_q = try cloneQueue(marker.queue),
+                        // This a useful placeholder, we clone from the .fresh state.
+                        .in_q = marker.queue,
                         .out_q = OutQueue.init(alloc, {}),
                         .fgs = .empty,
                         .bgs = .empty,
@@ -454,12 +456,12 @@ pub fn MarkedString(Kind: type) type {
                 /// Resets the state of the XTermLinePrinter to its
                 /// initial condition.
                 pub fn reset(xprint: *XLine) !void {
-                    xprint.in_q = try cloneQueue(xprint.marker.queue);
+                    if (xprint.state != .initial) xprint.in_q.deinit();
                     xprint.out_q.items.len = 0;
                     xprint.fgs.clearRetainingCapacity();
                     xprint.bgs.clearRetainingCapacity();
                     xprint.uls.clearRetainingCapacity();
-                    xprint.state = .initial;
+                    xprint.state = .fresh;
                     xprint.cursor = 0;
                     xprint.next_index = 0;
                     xprint.this_mark = null;
@@ -502,6 +504,8 @@ pub fn MarkedString(Kind: type) type {
                 }
 
                 fn setup(xprint: *XLine) !bool {
+                    // Clone queue.
+                    xprint.in_q = try cloneQueue(xprint.marker.queue);
                     // load this_mark, if any
                     const maybe_mark = xprint.in_q.removeOrNull();
                     if (maybe_mark) |mark| {
@@ -1038,6 +1042,9 @@ const XColor = enum {
     default_background,
     inverse,
     black,
+    super_magenta,
+    bg_grey69,
+    dashed_orange1,
 };
 
 const XColorMarker = MarkedString(XColor);
@@ -1055,12 +1062,17 @@ const x_markups = XColorArray.init(
         .default_background = xcolors.bgDefault(),
         .inverse = xcolors.inverse(),
         .black = xcolors.fgBasic(.black),
+        .super_magenta = xcolors.fgBasic(.magenta).superScript(),
+        .bg_grey69 = xcolors.bg256(145),
+        .dashed_orange1 = xcolors.ul256(.dashed, 214),
     },
 );
 
 const x_string =
     \\ aaa111333111aaa
+    \\
     \\ (foo bar bazbux) quux
+    \\
     \\ ---|||!!!|||---
     \\
 ;
@@ -1068,6 +1080,8 @@ const x_string =
 const reg_a = Regex.compile("aaa.*?aaa").?;
 const reg_1 = Regex.compile("111.*?111").?;
 const reg_paren = Regex.compile("\\(.*?\\)").?;
+const reg_dash = Regex.compile("---.*?---").?;
+const reg_bar = Regex.compile("|||.*?|||").?;
 
 test "XLine" {
     const allocator = std.testing.allocator;
@@ -1077,6 +1091,7 @@ test "XLine" {
     const XLine = XColorMarker.XtermLineWriter(@TypeOf(&writer));
     var marked = XColorMarker.init(allocator, x_string);
     defer marked.deinit();
+    var xprint = try XLine.init(&marked, x_markups, &writer);
     _ = try marked.matchAndMark(.red_italic_bold, reg_a);
     _ = try marked.matchAndMark(.green_underline, reg_1);
     _ = try marked.findAndMark(.purple_curly_underline, "333");
@@ -1086,7 +1101,6 @@ test "XLine" {
     _ = try marked.findAndMark(.blue, "foo bar baz");
     _ = try marked.findAndMark(.inverse, "uu");
     _ = try marked.findAndMark(.green, "quux");
-    var xprint = try XLine.init(&marked, x_markups, &writer);
     defer xprint.deinit();
     while (try xprint.next()) |more| {
         const line = try out_array.toOwnedSlice();

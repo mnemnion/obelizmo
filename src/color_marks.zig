@@ -50,6 +50,10 @@
 //! is and isn't supported, but doing so is out of scope for `obelizmo`.
 //!
 
+//| TODO: maybe add 'neutral', 'steady', and 'baseline', which
+//| have the effect of not-bold-or-faint, not-blinking, and not-italic-
+//| or-sub-or-superscript, respectively.
+
 const std = @import("std");
 const assert = std.debug.assert;
 
