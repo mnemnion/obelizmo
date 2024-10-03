@@ -100,10 +100,12 @@ pub fn fg256(palette: u8) Color {
 pub fn fgRgb(r: u8, g: u8, b: u8) Color {
     return Color{
         .foreground = .{
-            .rgb = .{
-                .r = r,
-                .g = g,
-                .b = b,
+            .color = .{
+                .rgb = .{
+                    .r = r,
+                    .g = g,
+                    .b = b,
+                },
             },
         },
     };
@@ -290,11 +292,20 @@ pub const ColorValue = union(enum(u2)) {
     default,
     basic: BasicColor,
     palette: u8,
-    rgb = struct {
+    rgb: struct {
         r: u8,
         g: u8,
         b: u8,
     },
+
+    // Note: there appears to be some debate about whether 256 color sequences
+    // should be colon or semicolon separated.  RGB mode suffers from this ambiguity
+    // but to a lesser degree.
+    //
+    // I'm going with colons for everything for now, but may need to change this to
+    // use semicolons for everything other than underline color, which is a fairly
+    // new concept, so we can expect support for the 'correct' sequence to be more-
+    // or-less ubiquitous.
 
     pub fn printOn(c_val: ColorValue, writer: anytype) @TypeOf(writer.*).Error!void {
         switch (c_val) {
@@ -338,7 +349,7 @@ pub const ForegroundColor = struct {
             if (color == .basic or color == .default) {
                 _ = try writer.writeAll("\x1b[3");
             } else {
-                _ = try writer.writeAll("\x1b[38:");
+                _ = try writer.writeAll("\x1b[38");
             }
             try color.printOn(writer);
         }
@@ -347,7 +358,7 @@ pub const ForegroundColor = struct {
     pub fn printOff(fg: ForegroundColor, writer: anytype) @TypeOf(writer.*).Error!void {
         if (fg.styles.bold or fg.styles.faint) _ = try writer.writeAll("\x1b[22m");
         if (fg.styles.italic) _ = try writer.writeAll("\x1b[23m");
-        if (fg.styles.blink or fg.style.rapid_blink) _ = try writer.writeAll("\x1b[25m");
+        if (fg.styles.blink or fg.styles.rapid_blink) _ = try writer.writeAll("\x1b[25m");
         if (fg.styles.strikethrough) _ = try writer.writeAll("\x1b[29m");
         if (fg.styles.overline) _ = try writer.writeAll("\x1b[55m");
 
@@ -422,7 +433,7 @@ pub const Color = union(ColorAttribute) {
     dotted_underline: ColorValue,
     dashed_underline: ColorValue,
 
-    pub fn printOn(color: Color, writer: anytype) @TypeOf(writer.*).Error!usize {
+    pub fn printOn(color: Color, writer: anytype) @TypeOf(writer.*).Error!void {
         // Write modifier
         switch (color) {
             .underline => _ = try writer.writeAll("\x1b[4m"),
@@ -454,14 +465,17 @@ pub const Color = union(ColorAttribute) {
             .dashed_underline,
             => |ul| {
                 switch (ul) {
-                    .default => _ = try writer.writeAll("\x1b59m"),
+                    .default => _ = try writer.writeAll("\x1b[59m"),
                     .basic => |b| {
-                        _ = try writer.writeAll("\x1b58:5:");
+                        // It doesn't appear that underline colors
+                        // support the default palette, so we emulate
+                        // as best we can with the bottom of 256.
+                        _ = try writer.writeAll("\x1b[58:5:");
                         _ = try writer.writeAll(b.value());
                         _ = try writer.writeAll("m");
                     },
                     .palette, .rgb => {
-                        _ = try writer.writeAll("\x1b58");
+                        _ = try writer.writeAll("\x1b[58");
                         try ul.printOn(writer);
                     },
                 }
@@ -509,8 +523,6 @@ pub const Color = union(ColorAttribute) {
             => return .underline,
             .inverse,
             .invisible,
-            .strikethrough,
-            .overline,
             => return .style,
             .foreground, .superscript, .subscript => return .foreground,
             .background => return .background,

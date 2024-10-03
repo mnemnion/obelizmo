@@ -7,8 +7,8 @@ const Order = std.math.Order;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 const encoded_writer = @import("encoded_writer.zig");
-const color_marks = @import("color_marks.zig");
-const Color = color_marks.Color;
+const xcolors = @import("color_marks.zig");
+const Color = xcolors.Color;
 
 pub const EncodedWriter = encoded_writer.EncodedWriter;
 pub const HtmlEncodedWriter = encoded_writer.HtmlEncodedWriter;
@@ -16,7 +16,7 @@ pub const DefaultEncodedWriter = encoded_writer.DefaultEncodedWriter;
 
 pub fn MarkedString(Kind: type) type {
     switch (@typeInfo(Kind)) {
-        .Enum => {},
+        .@"enum" => {},
         else => @compileError("MarkedString must be given an enum"),
     }
 
@@ -422,6 +422,7 @@ pub fn MarkedString(Kind: type) type {
                     const alloc = marker.queue.allocator;
                     return XLine{
                         .writer = writer,
+                        .marker = marker,
                         .markups = markups,
                         .in_q = try cloneQueue(marker.queue),
                         .out_q = OutQueue.init(alloc, {}),
@@ -474,7 +475,6 @@ pub fn MarkedString(Kind: type) type {
                     write_to_this,
                     write_to_next,
                     next_mark,
-                    drain,
                     last,
                     final,
                 };
@@ -587,7 +587,7 @@ pub fn MarkedString(Kind: type) type {
                         },
                         .foreground => {
                             try next_color.printOff(xprint.writer);
-                            removeMarkFrom(xprint.fgs, next_mark);
+                            removeMarkFrom(&xprint.fgs, next_mark);
                             const under_fg = xprint.fgs.getLastOrNull();
                             if (under_fg) |fg| {
                                 const fg_next = xprint.markups.get(fg.kind);
@@ -596,7 +596,7 @@ pub fn MarkedString(Kind: type) type {
                         },
                         .background => {
                             try next_color.printOff(xprint.writer);
-                            removeMarkFrom(xprint.bgs, next_mark);
+                            removeMarkFrom(&xprint.bgs, next_mark);
                             const under_bg = xprint.bgs.getLastOrNull();
                             if (under_bg) |bg| {
                                 const bg_next = xprint.markups.get(bg.kind);
@@ -605,7 +605,7 @@ pub fn MarkedString(Kind: type) type {
                         },
                         .underline => {
                             try next_color.printOff(xprint.writer);
-                            removeMarkFrom(xprint.uls, next_mark);
+                            removeMarkFrom(&xprint.uls, next_mark);
                             const under_ul = xprint.uls.getLastOrNull();
                             if (under_ul) |ul| {
                                 const ul_next = xprint.markups.get(ul.kind);
@@ -648,7 +648,16 @@ pub fn MarkedString(Kind: type) type {
                         return true;
                     }
                     const did_line = try xprint.printUpTo();
-                    if (did_line) return false;
+                    if (did_line) {
+                        // Check for final newline
+                        // zig fmt: off
+                        if (xprint.cursor == xprint.marker.string.len
+                        and xprint.marker.string[xprint.cursor - 1] == '\n') {
+                            xprint.state = .final;
+                        }
+                        // zig fmt: on
+                        return false;
+                    }
                     xprint.state = .final;
                     return true;
                 }
@@ -679,7 +688,7 @@ pub fn MarkedString(Kind: type) type {
                 }
 
                 /// Remove the mark from the ArrayList stack.  Mark must be present.
-                fn removeMarkFrom(mark_list: ArrayListUnmanaged(Mark), mark: Mark) void {
+                fn removeMarkFrom(mark_list: *ArrayListUnmanaged(Mark), mark: Mark) void {
                     const marks = mark_list.items;
                     var idx = marks.len - 1;
                     while (idx >= 0) : (idx -= 1) {
@@ -887,7 +896,7 @@ test "MarkedString" {
     ).expectEqual(SM.MarkupStringArray);
 }
 
-const Colors = enum {
+const TestColors = enum {
     red,
     blue,
     green,
@@ -896,7 +905,7 @@ const Colors = enum {
     // etc
 };
 
-const ColorMarker = MarkedString(Colors);
+const ColorMarker = MarkedString(TestColors);
 const ColorArray = ColorMarker.MarkupStringArray;
 const color_markup = ColorArray.init(
     .{
@@ -1016,4 +1025,72 @@ test "MarkedString regex" {
         \\  "<r>func</r> <b>10</b> <r>f<y>u</y>nky</r> <b>456</b>"
         ,
     ).expectEqual(tree_string);
+}
+
+const XColor = enum {
+    blue,
+    green,
+    forty_two,
+    red_italic_bold,
+    green_underline,
+    purple_curly_underline,
+    tan_background,
+    default_background,
+    inverse,
+    black,
+};
+
+const XColorMarker = MarkedString(XColor);
+const XColorArray = XColorMarker.MarkupColorArray;
+
+const x_markups = XColorArray.init(
+    .{
+        .blue = xcolors.fgBasic(.blue),
+        .green = xcolors.fgBasic(.green),
+        .forty_two = xcolors.fg256(42),
+        .red_italic_bold = xcolors.fgRgb(255, 0, 0).italic().bold(),
+        .green_underline = xcolors.ulBasic(.single, .green),
+        .purple_curly_underline = xcolors.ulRgb(.curly, 178, 40, 222),
+        .tan_background = xcolors.bgRgb(247, 228, 169),
+        .default_background = xcolors.bgDefault(),
+        .inverse = xcolors.inverse(),
+        .black = xcolors.fgBasic(.black),
+    },
+);
+
+const x_string =
+    \\ aaa111333111aaa
+    \\ (foo bar bazbux) quux
+    \\ ---|||!!!|||---
+    \\
+;
+
+const reg_a = Regex.compile("aaa.*?aaa").?;
+const reg_1 = Regex.compile("111.*?111").?;
+const reg_paren = Regex.compile("\\(.*?\\)").?;
+
+test "XLine" {
+    const allocator = std.testing.allocator;
+    var out_array = std.ArrayList(u8).init(allocator);
+    defer out_array.deinit();
+    const writer = out_array.writer();
+    const XLine = XColorMarker.XtermLineWriter(@TypeOf(&writer));
+    var marked = XColorMarker.init(allocator, x_string);
+    defer marked.deinit();
+    _ = try marked.matchAndMark(.red_italic_bold, reg_a);
+    _ = try marked.matchAndMark(.green_underline, reg_1);
+    _ = try marked.findAndMark(.purple_curly_underline, "333");
+    _ = try marked.findAndMark(.green, "33311");
+    _ = try marked.matchAndMark(.tan_background, reg_paren);
+    _ = try marked.matchAndMark(.black, reg_paren);
+    _ = try marked.findAndMark(.blue, "foo bar baz");
+    _ = try marked.findAndMark(.inverse, "uu");
+    _ = try marked.findAndMark(.green, "quux");
+    var xprint = try XLine.init(&marked, x_markups, &writer);
+    defer xprint.deinit();
+    while (try xprint.next()) |more| {
+        const line = try out_array.toOwnedSlice();
+        defer allocator.free(line);
+        std.debug.print("{s} {}\n", .{ line, more });
+    }
 }
