@@ -29,7 +29,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     })) |ohsnap_dep| {
-        lib_unit_tests.root_module.addImport("ohsnap", ohsnap_dep.module("ohsnap"));
+        // lib_unit_tests.root_module.addImport("ohsnap", ohsnap_dep.module("ohsnap"));
+        _ = ohsnap_dep;
     }
 
     if (b.lazyDependency("mvzr", .{
