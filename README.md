@@ -86,7 +86,7 @@ const index: ?usize = try string_marker.matchAndMark(.teal, number_regex);
 if (index) |i| {
    _ = try string_marker.matchAndMarkPos(.yellow, number_regex, index.? + 10);
 }
-const fizz_regex = mvzr.Regex.compile("([Ff]izz([Bb]uzz))?|[Bbuzz])").?;
+const fizz_regex = mvzr.Regex.compile("([Ff]izz([Bb]uzz)?)|[Bbuzz])").?;
 const did_match: bool = try string_marker.matchAndMarkAll(.teal, fizz_regex);
 if (!did_match) {
     std.debug.print("definitely not fizzbuzz\n", .{});
