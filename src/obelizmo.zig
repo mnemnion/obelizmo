@@ -936,6 +936,7 @@ test "MarkedString regex" {
 }
 
 const XColor = enum {
+    reset_italic,
     blue,
     green,
     forty_two,
@@ -956,6 +957,7 @@ const XColorArray = XColorMarker.MarkupColorArray;
 
 const x_markups = XColorArray.init(
     .{
+        .reset_italic = xcolors.reset().upright(),
         .blue = xcolors.fgBasic(.blue),
         .green = xcolors.fgBasic(.green),
         .forty_two = xcolors.fg256(42),
@@ -999,7 +1001,8 @@ test "XLine" {
     _ = try marked.matchAndMark(.red_italic_bold, reg_a);
     _ = try marked.matchAndMark(.green_underline, reg_1);
     _ = try marked.findAndMark(.purple_curly_underline, "333");
-    _ = try marked.findAndMark(.green, "33311");
+    _ = try marked.findAndMark(.reset_italic, "333");
+    _ = try marked.findAndMark(.green, "333");
     _ = try marked.matchAndMark(.tan_background, reg_paren);
     _ = try marked.matchAndMark(.black, reg_paren);
     _ = try marked.findAndMark(.blue, "foo bar baz");

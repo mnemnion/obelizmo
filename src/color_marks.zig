@@ -254,7 +254,7 @@ pub fn invisible() Color {
 
 /// Create a reset style.
 pub fn reset() Color {
-    return .reset;
+    return .{ .reset = .{} };
 }
 
 pub const ColorAttribute = enum {
@@ -727,7 +727,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.neutral = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("neutral may only be set on a reset() color"),
         }
@@ -740,7 +740,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.upright = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("upright may only be set on a reset() color"),
         }
@@ -753,7 +753,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.steady = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("steady may only be set on a reset() color"),
         }
@@ -766,7 +766,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.baseline = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("baseline may only be set on a reset() color"),
         }
@@ -779,7 +779,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.background = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("reset background may only be set on a reset() color"),
         }
@@ -792,7 +792,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.foreground = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("reset foreground may only be set on a reset() color"),
         }
@@ -805,7 +805,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.underline = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("reset underline may only be set on a reset() color"),
         }
@@ -818,7 +818,7 @@ pub const Color = union(ColorAttribute) {
                 var new_r = r;
                 new_r.all = false;
                 new_r.underline_color = true;
-                return Color{ .reset = r };
+                return Color{ .reset = new_r };
             },
             else => @panic("reset underline color may only be set on a reset() color"),
         }
