@@ -338,6 +338,29 @@ pub fn MarkedString(Kind: type) type {
                     };
                 }
 
+                /// Initialize an XTermLineWriter. Free with xprint.deinit().
+                /// This initializer consumes the marked string, which is left
+                /// in a valid state but bereft of marks.  It must still be freed.
+                pub fn initOnce(
+                    marker: *const SMark,
+                    markups: MarkupColorArray,
+                    writer: Writer,
+                ) !XLine {
+                    const alloc = marker.queue.allocator;
+                    return XLine{
+                        .writer = writer,
+                        .marker = marker,
+                        .markups = markups,
+                        // This a useful placeholder, we clone from the .fresh state.
+                        .in_q = marker.queue,
+                        .out_q = OutQueue.init(alloc, {}),
+                        .fgs = .empty,
+                        .bgs = .empty,
+                        .uls = .empty,
+                        .state = .initial_consume,
+                    };
+                }
+
                 /// Free memory owned by the XTermLineWriter.  This does not
                 /// include the MarkedString or MarkupColorArray.
                 pub fn deinit(xprint: *XLine) void {
@@ -376,6 +399,7 @@ pub fn MarkedString(Kind: type) type {
                 ///
                 /// These are those states:
                 const PrintState = enum {
+                    initial_consume,
                     initial,
                     this_mark,
                     write_to_this,
@@ -392,7 +416,8 @@ pub fn MarkedString(Kind: type) type {
                     var more: bool = true;
                     while (more) {
                         switch (xprint.state) {
-                            .initial => more = try xprint.setup(),
+                            .initial_consume => more = try xprint.setup(false),
+                            .initial => more = try xprint.setup(true),
                             .this_mark => more = try xprint.printThisMark(),
                             .write_to_this => more = try xprint.writeToThis(),
                             .write_to_next => more = try xprint.writeToNext(),
@@ -407,9 +432,11 @@ pub fn MarkedString(Kind: type) type {
                         return true;
                 }
 
-                fn setup(xprint: *XLine) !bool {
+                fn setup(xprint: *XLine, clone: bool) !bool {
                     // Clone queue.
-                    xprint.in_q = try cloneQueue(xprint.marker.queue);
+                    if (clone) {
+                        xprint.in_q = try cloneQueue(xprint.marker.queue);
+                    }
                     // load this_mark, if any
                     const maybe_mark = xprint.in_q.removeOrNull();
                     if (maybe_mark) |mark| {
