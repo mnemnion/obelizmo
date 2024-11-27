@@ -95,7 +95,19 @@ if (!did_match) {
 
 That's it for marking methods.  If you have some complex structure, like an abstract or concrete syntax tree, you should find it easy to mark up the string using the direct methods, since one of `[start, end]` or `[offset, length]` is generally used to store the span in those structures.  As a reminder, the order of marking doesn't matter, any order will result in the same printed value and will take more-or-less as long to build as any other.  So any convenient approach to iterating such a tree will suit the purpose.
 
-### Printing
+## Removing Marks
+
+A mark may be removed with `string_marker.removeMark(.kind)`.  This removes the first mark of its kind which it encounters, which may not be the first mark in the order of the string.  Anticipated use cases are removing one unique mark of a given kind, or all unique marks of a kind, which may be accomplished by calling the function until it returns `null`.
+
+```zig
+const removed_mark: ?Mark = string_marker.removeMark(.yellow);
+
+while (string_marker.removeMark(.red)) |_| {}
+```
+
+Since `obelizmo` uses a heap to store marks, the `while` loop above is roughly as efficient as it can be at removing all such marks.  While it's possible to remove the first or last mark of a kind as ordered on the string, with a linear search, this is not currently included as it's unlikely to prove useful.  I'm willing to add it if someone has a demonstrable use case for this.
+
+## Printing
 
 Once your `MarkedString` is marked, you'll probably want to print it to something, or potentially several somethings.  `obelizmo` provides for a couple of approaches to this.
 

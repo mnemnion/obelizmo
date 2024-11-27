@@ -330,7 +330,7 @@ pub const ColorValue = union(enum(u2)) {
     // new concept, so we can expect support for the 'correct' sequence to be more-
     // or-less ubiquitous.
 
-    pub fn printOn(c_val: ColorValue, writer: anytype) @TypeOf(writer.*).Error!void {
+    pub fn printOn(c_val: ColorValue, writer: anytype) ErrorOf(@TypeOf(writer))!void {
         switch (c_val) {
             .default => _ = try writer.writeAll("9m"),
             .basic => |basic| {
@@ -358,7 +358,7 @@ pub const Resets = packed struct {
     underline: bool = false,
     underline_color: bool = false,
 
-    pub fn printOn(r: Resets, writer: anytype) !void {
+    pub fn printOn(r: Resets, writer: anytype) ErrorOf(@TypeOf(writer))!void {
         if (r.all) {
             try writer.writeAll("\x1b[0m");
             return;
@@ -388,7 +388,7 @@ pub const ForegroundColor = struct {
     color: ?ColorValue,
     styles: TextStyles = .{},
 
-    pub fn printOn(fg: ForegroundColor, writer: anytype) @TypeOf(writer.*).Error!void {
+    pub fn printOn(fg: ForegroundColor, writer: anytype) ErrorOf(@TypeOf(writer))!void {
         if (fg.styles.bold) _ = try writer.writeAll("\x1b[1m");
         if (fg.styles.faint) _ = try writer.writeAll("\x1b[2m");
         if (fg.styles.italic) _ = try writer.writeAll("\x1b[3m");
@@ -407,7 +407,7 @@ pub const ForegroundColor = struct {
         }
     }
 
-    pub fn printOff(fg: ForegroundColor, writer: anytype) @TypeOf(writer.*).Error!void {
+    pub fn printOff(fg: ForegroundColor, writer: anytype) ErrorOf(@TypeOf(writer))!void {
         if (fg.styles.bold or fg.styles.faint) _ = try writer.writeAll("\x1b[22m");
         if (fg.styles.italic) _ = try writer.writeAll("\x1b[23m");
         if (fg.styles.blink or fg.styles.rapid_blink) _ = try writer.writeAll("\x1b[25m");
@@ -486,7 +486,7 @@ pub const Color = union(ColorAttribute) {
     dotted_underline: ColorValue,
     dashed_underline: ColorValue,
 
-    pub fn printOn(color: Color, writer: anytype) @TypeOf(writer.*).Error!void {
+    pub fn printOn(color: Color, writer: anytype) ErrorOf(@TypeOf(writer))!void {
         // Write modifier
         switch (color) {
             .underline => _ = try writer.writeAll("\x1b[4m"),
@@ -543,7 +543,7 @@ pub const Color = union(ColorAttribute) {
         }
     }
 
-    pub fn printOff(color: Color, writer: anytype) @TypeOf(writer.*).Error!void {
+    pub fn printOff(color: Color, writer: anytype) ErrorOf(@TypeOf(writer))!void {
         switch (color) {
             .reset => {},
             .inverse => _ = try writer.writeAll("\x1b[27m"),
@@ -824,3 +824,12 @@ pub const Color = union(ColorAttribute) {
         }
     }
 };
+
+pub fn ErrorOf(Writer: type) type {
+    const wt_info = @typeInfo(Writer);
+    return switch (wt_info) {
+        .pointer => std.meta.Child(Writer).Error,
+        .@"struct" => Writer.Error,
+        else => error{},
+    };
+}

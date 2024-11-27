@@ -1,4 +1,5 @@
 const std = @import("std");
+const ErrorOf = @import("color_marks.zig").ErrorOf;
 
 /// Returns a type which wraps another Writer, and takes a pointer to a
 /// function for performing encoded writes.  An instance of this type
@@ -10,23 +11,31 @@ const std = @import("std");
 /// expose the standard Writer interface.
 pub fn EncodedWriter(
     WriterType: type,
-    writeEncodeFn: *const fn (writer: WriterType, bytes: []const u8) WriterType.Error!usize,
+    writeEncodeFn: *const fn (writer: WriterType, bytes: []const u8) ErrorOf(WriterType)!usize,
 ) type {
     return struct {
         context: *WriterType,
         const EncodeWrite = @This();
-        pub const Error = WriterType.Error;
+        pub const Error = ErrorOf(WriterType);
 
         pub fn init(context: *WriterType) EncodeWrite {
             return EncodeWrite{ .context = context };
         }
 
         pub fn writeEncode(e_write: EncodeWrite, bytes: []const u8) Error!usize {
-            return try writeEncodeFn(e_write.context.*, bytes);
+            return writeEncodeFn(e_write.context.*, bytes);
         }
 
         pub fn write(e_write: EncodeWrite, bytes: []const u8) Error!usize {
-            return try e_write.context.write(bytes);
+            return e_write.context.write(bytes);
+        }
+
+        pub fn writeAll(e_write: EncodeWrite, bytes: []const u8) Error!void {
+            return e_write.context.writeAll(bytes);
+        }
+
+        pub fn print(e_write: EncodeWrite, comptime fmt: []const u8, args: anytype) Error!void {
+            return e_write.context.print(fmt, args);
         }
     };
 }
@@ -41,22 +50,86 @@ pub fn HtmlEncodedWriter(WriterType: type) type {
 /// Return an EncodedWriter which does no encoding of the bytes provided.
 pub fn DefaultEncodedWriter(WriterType: type) type {
     const defaultEncodeFn = struct {
-        fn writeEncode(writer: WriterType, bytes: []const u8) WriterType.Error!usize {
+        fn writeEncode(writer: WriterType, bytes: []const u8) ErrorOf(WriterType)!usize {
             return try writer.write(bytes);
         }
     }.writeEncode;
     return EncodedWriter(WriterType, defaultEncodeFn);
 }
 
+const control_pic = fill: {
+    var control_pic_fill: [32]u21 = .{0} ** 32;
+    for (0x2400..0x241f, 0..) |c, i| {
+        if (i == 8) {
+            // We call 0x08 "delete" now, historically "backspace", now 0x7f
+            control_pic_fill[i] = '␡';
+        } else {
+            control_pic_fill[i] = @intCast(c);
+        }
+    }
+    break :fill control_pic_fill;
+};
+
+/// Return an EncodedWriter which escapes non-printing C0 and all C1 codes.
+pub fn XtermEncodedWriter(WriterType: type) type {
+    const xTermEncodeFn = struct {
+        fn writeEncode(writer: WriterType, bytes: []const u8) ErrorOf(WriterType)!usize {
+            var cursor: usize = 0;
+            var idx: usize = 0;
+            var count: usize = 0;
+            while (idx < bytes.len) : (idx += 1) {
+                const b = bytes[idx];
+                switch (b) {
+                    0...0x08, // '\t', '\n'
+                    0x0b...0x0c, // '\r'
+                    0x0e...0x1f,
+                    => {
+                        count += try writer.write(bytes[cursor..idx]);
+                        try writer.print("{u}", .{control_pic[b]});
+                        count += 1;
+                        cursor = idx + 1;
+                    },
+                    0x7f => {
+                        count += try writer.write(bytes[cursor..idx]);
+                        try writer.writeAll("␈");
+                        count += 1;
+                        cursor = idx + 1;
+                    },
+                    0xc2 => {
+                        if (idx + 1 < bytes.len) {
+                            const b1 = bytes[idx + 1];
+                            if (0x80 <= b1 and b1 <= 0x9f) {
+                                count += try writer.write(bytes[cursor..idx]);
+                                idx += 1;
+                                // Convenient property: Codepoint value of C1s is just
+                                // the second byte.
+                                // TODO: we need symbols here too I think.
+                                try writer.print("\\u{{{x:0>2}}}", .{b1});
+                                // \u{80} == 6 bytes
+                                count += 6;
+                                cursor = idx + 1;
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+            count += try writer.write(bytes[cursor..idx]);
+            return count;
+        }
+    }.writeEncode;
+    return EncodedWriter(WriterType, xTermEncodeFn);
+}
+
 /// Return a `writeEncode` function compatible with an `EncodedWriter` specialized
 /// for the provided WriterType, which escapes HTML encoded entities.
 pub fn htmlEscapeEncoder(
     WriterType: type,
-) fn (WriterType, []const u8) WriterType.Error!usize {
+) fn (WriterType, []const u8) ErrorOf(WriterType)!usize {
     return struct {
         // TODO more efficient to write out when we hit an entity,
-        // wrather than calling writeByte so often.
-        fn writeEncodeFn(writer: WriterType, bytes: []const u8) WriterType.Error!usize {
+        // rather than calling writeByte so often.
+        fn writeEncodeFn(writer: WriterType, bytes: []const u8) ErrorOf(WriterType)!usize {
             var count: usize = 0;
             for (bytes, 0..) |byte, i| {
                 count += count: {

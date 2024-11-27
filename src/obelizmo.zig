@@ -8,11 +8,16 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 const encoded_writer = @import("encoded_writer.zig");
 const xcolors = @import("color_marks.zig");
-const Color = xcolors.Color;
+
+pub usingnamespace xcolors;
+
+pub const Color = xcolors.Color;
+pub const ErrorOf = xcolors.ErrorOf;
 
 pub const EncodedWriter = encoded_writer.EncodedWriter;
 pub const HtmlEncodedWriter = encoded_writer.HtmlEncodedWriter;
 pub const DefaultEncodedWriter = encoded_writer.DefaultEncodedWriter;
+pub const XtermEncodedWriter = encoded_writer.XtermEncodedWriter;
 
 pub fn MarkedString(Kind: type) type {
     switch (@typeInfo(Kind)) {
@@ -261,6 +266,19 @@ pub fn MarkedString(Kind: type) type {
             return a_match;
         }
 
+        /// Remove the first mark encountered of the provided enum kind.
+        /// This is the first mark in heap order, which will not consistently
+        /// be the first mark on the string.  Returns the mark when found,
+        /// or `null` otherwise.
+        pub fn removeMark(marker: *SMark, mark: Kind) ?Mark {
+            for (marker.queue.items, 0..) |item, i| {
+                if (item.kind == mark) {
+                    return marker.queue.removeIndex(i);
+                }
+            }
+            return null;
+        }
+
         //| Writing
 
         fn cloneQueue(queue: MarkQueue) error{OutOfMemory}!MarkQueue {
@@ -318,6 +336,22 @@ pub fn MarkedString(Kind: type) type {
 
                 const XLine = @This();
 
+                const can_encode = encode: {
+                    const write_info = @typeInfo(Writer);
+                    switch (write_info) {
+                        .pointer => {
+                            break :encode @hasDecl(std.meta.Child(Writer), "writeEncode");
+                        },
+                        .@"struct" => {
+                            break :encode @hasDecl(Writer, "writeEncode");
+                        },
+                        // This can fail later, it's fine
+                        else => break :encode false,
+                    }
+                };
+
+                pub const Error = ErrorOf(Writer);
+
                 /// Initialize an XTermLineWriter. Free with xprint.deinit().
                 pub fn init(
                     marker: *const SMark,
@@ -338,6 +372,7 @@ pub fn MarkedString(Kind: type) type {
                     };
                 }
 
+                /// Buggy: do not use.
                 /// Initialize an XTermLineWriter. Free with xprint.deinit().
                 /// This initializer consumes the marked string, which is left
                 /// in a valid state but bereft of marks.  It must still be freed.
@@ -346,12 +381,17 @@ pub fn MarkedString(Kind: type) type {
                     markups: MarkupColorArray,
                     writer: Writer,
                 ) !XLine {
+                    // NOTE: This function has problems, because calling reset after
+                    // will invalidate the queue, which interferes with freeing the
+                    // marker.  The assumption that the in_q is a copy appears in
+                    // several places, so if we decide to go with a disposable variant,
+                    // that will require more attention than I in fact paid in writing
+                    // this.
                     const alloc = marker.queue.allocator;
                     return XLine{
                         .writer = writer,
                         .marker = marker,
                         .markups = markups,
-                        // This a useful placeholder, we clone from the .fresh state.
                         .in_q = marker.queue,
                         .out_q = OutQueue.init(alloc, {}),
                         .fgs = .empty,
@@ -372,12 +412,29 @@ pub fn MarkedString(Kind: type) type {
                     xprint.uls.deinit(alloc);
                 }
 
-                /// Provide the XTermLinePrinter with a new MarkedString.  This
+                /// Provide the XtermLinePrinter with a new MarkedString.  This
                 /// calls `reset` internally, after which the line printer is
                 /// ready to be iterated over with `next`.
-                pub fn newText(xprint: *XLine, markstring: *const SMark) !void {
+                pub fn newText(xprint: *XLine, markstring: *const SMark) Error!void {
                     xprint.marker = markstring;
                     try xprint.reset();
+                }
+
+                /// Buggy: do not use.
+                /// Provide the XtermLinePrinter with a new MarkedString.  This will
+                /// be printed destructively, un-marking the MarkedString in the
+                /// process.  It is left in a valid, but empty state, and must still
+                /// be freed.
+                pub fn newTextOnce(xprint: *XLine, markstring: *const SMark) Error!void {
+                    // NOTE: this causes memory management problems which are hard to fix,
+                    // because the consumer has to know things about the state of the
+                    // queue which it can't necessarily know.  As such it should not
+                    // be used, until / unless I come up with a way to fix those
+                    // issues.
+                    xprint.marker = markstring;
+                    try xprint.reset();
+                    xprint.state = .initial_consume;
+                    xprint.in_q = markstring.queue;
                 }
 
                 /// Resets the state of the XTermLinePrinter to its
@@ -388,7 +445,7 @@ pub fn MarkedString(Kind: type) type {
                     xprint.fgs.clearRetainingCapacity();
                     xprint.bgs.clearRetainingCapacity();
                     xprint.uls.clearRetainingCapacity();
-                    xprint.state = .fresh;
+                    xprint.state = .initial;
                     xprint.cursor = 0;
                     xprint.next_index = 0;
                     xprint.this_mark = null;
@@ -412,7 +469,7 @@ pub fn MarkedString(Kind: type) type {
                 /// Print the next line.  Returns `true` until there are
                 /// no more lines to print, then `false`.  Subsequent calls
                 /// will return `null`.
-                pub fn next(xprint: *XLine) !?bool {
+                pub fn next(xprint: *XLine) Error!?bool {
                     var more: bool = true;
                     while (more) {
                         switch (xprint.state) {
@@ -432,7 +489,7 @@ pub fn MarkedString(Kind: type) type {
                         return true;
                 }
 
-                fn setup(xprint: *XLine, clone: bool) !bool {
+                fn setup(xprint: *XLine, clone: bool) Error!bool {
                     // Clone queue.
                     if (clone) {
                         xprint.in_q = try cloneQueue(xprint.marker.queue);
@@ -450,11 +507,7 @@ pub fn MarkedString(Kind: type) type {
                     return true;
                 }
 
-                // Note: once this is up and running, we can
-                // write logic which merges two Colors into
-                // one for printing "on" and two for printing
-                // "off".  Meanwhile redundant SGR is harmless.
-                fn printThisMark(xprint: *XLine) !bool {
+                fn printThisMark(xprint: *XLine) Error!bool {
                     // Safety: `this_mark` is populated every time this
                     // state is reached.
                     const mark = xprint.this_mark.?;
@@ -495,14 +548,14 @@ pub fn MarkedString(Kind: type) type {
                     return true;
                 }
 
-                fn writeToThis(xprint: *XLine) !bool {
+                fn writeToThis(xprint: *XLine) Error!bool {
                     const did_line = try xprint.printUpTo();
                     if (did_line) return false;
                     xprint.state = .this_mark;
                     return true;
                 }
 
-                fn writeToNext(xprint: *XLine) !bool {
+                fn writeToNext(xprint: *XLine) Error!bool {
                     const did_line = try xprint.printUpTo();
                     if (did_line) return false;
                     xprint.state = .next_mark;
@@ -512,7 +565,7 @@ pub fn MarkedString(Kind: type) type {
                 // This will be improved later, by combining a continuation mark
                 // with the off-button on the next_mark Color.  Hence the common
                 // printOff isn't lifted out of the switch.
-                fn printNextMark(xprint: *XLine) !bool {
+                fn printNextMark(xprint: *XLine) Error!bool {
                     const next_mark = xprint.out_q.remove();
                     // Add assertion that cursor is correct (complex due to newlines)
                     const next_color = xprint.markups.get(next_mark.kind);
@@ -577,7 +630,7 @@ pub fn MarkedString(Kind: type) type {
                     return true;
                 }
 
-                fn printLast(xprint: *XLine) !bool {
+                fn printLast(xprint: *XLine) Error!bool {
                     if (xprint.cursor >= xprint.marker.string.len) {
                         xprint.state = .final;
                         return true;
@@ -597,12 +650,16 @@ pub fn MarkedString(Kind: type) type {
                     return true;
                 }
 
-                fn printUpTo(xprint: *XLine) !bool {
+                fn printUpTo(xprint: *XLine) Error!bool {
                     const start = xprint.cursor;
                     while (xprint.cursor < xprint.next_index) : (xprint.cursor += 1) {
                         const b = xprint.marker.string[xprint.cursor];
                         if (b == '\n' or b == '\r') {
-                            _ = try xprint.writer.writeAll(xprint.marker.string[start..xprint.cursor]);
+                            if (can_encode) {
+                                _ = try xprint.writer.writeEncode(xprint.marker.string[start..xprint.cursor]);
+                            } else {
+                                try xprint.writer.writeAll(xprint.marker.string[start..xprint.cursor]);
+                            }
                             const n: u8 = if (xprint.cursor + 1 < xprint.marker.string.len)
                                 xprint.marker.string[xprint.cursor + 1]
                             else
@@ -618,7 +675,11 @@ pub fn MarkedString(Kind: type) type {
                             return true;
                         }
                     } // If we exceeded the index (due to the logic above), then this is empty:
-                    _ = try xprint.writer.writeAll(xprint.marker.string[start..xprint.cursor]);
+                    if (can_encode) {
+                        _ = try xprint.writer.writeEncode(xprint.marker.string[start..xprint.cursor]);
+                    } else {
+                        try xprint.writer.writeAll(xprint.marker.string[start..xprint.cursor]);
+                    }
                     return false;
                 }
 
@@ -654,13 +715,29 @@ pub fn MarkedString(Kind: type) type {
             marker: *const SMark,
             writer: anytype,
             markups: MarkupStringArray,
-        ) @TypeOf(writer.*).Error!usize {
+        ) ErrorOf(writer)!usize {
             // See if there's a writeEncode function.
-            const WriteT = @TypeOf(writer.*);
-            const writeBody = if (@hasDecl(WriteT, "writeEncode"))
-                WriteT.writeEncode
-            else
-                WriteT.write;
+            const writeBody = encode: {
+                const Writer = @TypeOf(writer);
+                const write_info = @typeInfo(Writer);
+                switch (write_info) {
+                    .pointer => {
+                        if (@hasDecl(std.meta.Child(Writer), "writeEncode")) {
+                            break :encode std.meta.Child(Writer).writeEncode;
+                        } else {
+                            break :encode std.meta.Child(Writer).write;
+                        }
+                    },
+                    .@"struct" => {
+                        if (@hasDecl(Writer, "writeEncode")) {
+                            break :encode Writer.writeEncode;
+                        } else {
+                            break :encode Writer.write;
+                        }
+                    },
+                    else => unreachable,
+                }
+            };
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
             const allocator = marker.queue.allocator;
@@ -1039,6 +1116,15 @@ test "XLine" {
     _ = try marked.matchAndMark(.bg_grey69, reg_bar);
     _ = try marked.matchAndMark(.dashed_orange1, reg_dash);
     defer xprint.deinit();
+    while (try xprint.next()) |_| {
+        const line = try out_array.toOwnedSlice();
+        defer allocator.free(line);
+        std.debug.print("{s}\n", .{line});
+    }
+    // Prints unmarked string properly.
+    var empty_mark = XColorMarker.init(allocator, x_string);
+    defer empty_mark.deinit();
+    try xprint.newText(&empty_mark);
     while (try xprint.next()) |_| {
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
