@@ -292,6 +292,10 @@ pub fn MarkedString(Kind: type) type {
             };
         }
 
+        fn sameQueue(q1: MarkQueue, q2: MarkQueue) bool {
+            return @intFromPtr(q1.items.ptr) == @intFromPtr(q2.items.ptr);
+        }
+
         const LEFT: usize = 0;
         const RIGHT: usize = 1;
 
@@ -350,20 +354,20 @@ pub fn MarkedString(Kind: type) type {
                     }
                 };
 
-                pub const Error = ErrorOf(Writer);
+                pub const Error = ErrorOf(Writer) || error{OutOfMemory};
 
                 /// Initialize an XTermLineWriter. Free with xprint.deinit().
                 pub fn init(
                     marker: *const SMark,
                     markups: MarkupColorArray,
                     writer: Writer,
-                ) !XLine {
+                ) XLine {
                     const alloc = marker.queue.allocator;
                     return XLine{
                         .writer = writer,
                         .marker = marker,
                         .markups = markups,
-                        // This a useful placeholder, we clone from the .fresh state.
+                        // This a useful placeholder, we clone from the .initial state.
                         .in_q = marker.queue,
                         .out_q = OutQueue.init(alloc, {}),
                         .fgs = .empty,
@@ -372,21 +376,16 @@ pub fn MarkedString(Kind: type) type {
                     };
                 }
 
-                /// Buggy: do not use.
                 /// Initialize an XTermLineWriter. Free with xprint.deinit().
                 /// This initializer consumes the marked string, which is left
                 /// in a valid state but bereft of marks.  It must still be freed.
+                /// It is legal to reset() this and print again, but no marks will
+                /// be evident.
                 pub fn initOnce(
                     marker: *const SMark,
                     markups: MarkupColorArray,
                     writer: Writer,
-                ) !XLine {
-                    // NOTE: This function has problems, because calling reset after
-                    // will invalidate the queue, which interferes with freeing the
-                    // marker.  The assumption that the in_q is a copy appears in
-                    // several places, so if we decide to go with a disposable variant,
-                    // that will require more attention than I in fact paid in writing
-                    // this.
+                ) XLine {
                     const alloc = marker.queue.allocator;
                     return XLine{
                         .writer = writer,
@@ -405,7 +404,11 @@ pub fn MarkedString(Kind: type) type {
                 /// include the MarkedString or MarkupColorArray.
                 pub fn deinit(xprint: *XLine) void {
                     const alloc = xprint.marker.queue.allocator;
-                    if (xprint.state != .initial) xprint.in_q.deinit();
+                    if (xprint.state != .initial and
+                        !sameQueue(xprint.marker.queue, xprint.in_q))
+                    {
+                        xprint.in_q.deinit();
+                    }
                     xprint.out_q.deinit();
                     xprint.fgs.deinit(alloc);
                     xprint.bgs.deinit(alloc);
@@ -415,32 +418,30 @@ pub fn MarkedString(Kind: type) type {
                 /// Provide the XtermLinePrinter with a new MarkedString.  This
                 /// calls `reset` internally, after which the line printer is
                 /// ready to be iterated over with `next`.
-                pub fn newText(xprint: *XLine, markstring: *const SMark) Error!void {
+                pub fn newText(xprint: *XLine, markstring: *const SMark) void {
                     xprint.marker = markstring;
-                    try xprint.reset();
+                    xprint.reset();
                 }
 
-                /// Buggy: do not use.
                 /// Provide the XtermLinePrinter with a new MarkedString.  This will
                 /// be printed destructively, un-marking the MarkedString in the
-                /// process.  It is left in a valid, but empty state, and must still
-                /// be freed.
-                pub fn newTextOnce(xprint: *XLine, markstring: *const SMark) Error!void {
-                    // NOTE: this causes memory management problems which are hard to fix,
-                    // because the consumer has to know things about the state of the
-                    // queue which it can't necessarily know.  As such it should not
-                    // be used, until / unless I come up with a way to fix those
-                    // issues.
+                /// process.  It is left in a valid but empty state, and must still
+                /// be freed: the new text may be printed again, but will have no marks.
+                pub fn newTextOnce(xprint: *XLine, markstring: *const SMark) void {
                     xprint.marker = markstring;
-                    try xprint.reset();
+                    xprint.reset();
                     xprint.state = .initial_consume;
                     xprint.in_q = markstring.queue;
                 }
 
                 /// Resets the state of the XTermLinePrinter to its
                 /// initial condition.
-                pub fn reset(xprint: *XLine) !void {
-                    if (xprint.state != .initial) xprint.in_q.deinit();
+                pub fn reset(xprint: *XLine) void {
+                    if (xprint.state != .initial and
+                        !sameQueue(xprint.marker.queue, xprint.in_q))
+                    {
+                        xprint.in_q.deinit();
+                    }
                     xprint.out_q.items.len = 0;
                     xprint.fgs.clearRetainingCapacity();
                     xprint.bgs.clearRetainingCapacity();
@@ -458,6 +459,7 @@ pub fn MarkedString(Kind: type) type {
                 const PrintState = enum {
                     initial_consume,
                     initial,
+                    resume_print,
                     this_mark,
                     write_to_this,
                     write_to_next,
@@ -468,28 +470,180 @@ pub fn MarkedString(Kind: type) type {
 
                 /// Print the next line.  Returns `true` until there are
                 /// no more lines to print, then `false`.  Subsequent calls
-                /// will return `null`.
+                /// will return `null`.  You do not need to call `next()`
+                /// again if `false` is returned.
                 pub fn next(xprint: *XLine) Error!?bool {
+                    if (xprint.state == .final) return null;
                     var more: bool = true;
                     while (more) {
                         switch (xprint.state) {
                             .initial_consume => more = try xprint.setup(false),
                             .initial => more = try xprint.setup(true),
+                            .resume_print => more = try xprint.resumePrint(),
                             .this_mark => more = try xprint.printThisMark(),
                             .write_to_this => more = try xprint.writeToThis(),
                             .write_to_next => more = try xprint.writeToNext(),
                             .next_mark => more = try xprint.printNextMark(),
                             .last => more = try xprint.printLast(),
-                            .final => return null,
+                            .final => return false,
                         }
                     }
-                    if (xprint.state == .final)
-                        return false
-                    else
-                        return true;
+                    return true;
                 }
 
-                fn setup(xprint: *XLine, clone: bool) Error!bool {
+                pub const SeekError = error{ BeforeIndex, IndexTooLarge, OutOfMemory };
+
+                /// Seek the printer forward to `index`.  Errors are thrown if `index` is
+                /// less than the span already printed, or greater than the string length.
+                /// Prints nothing until `next` is called again, when it will start any
+                /// terminal codes needed, after resetting any which happened to be in
+                /// play.  Return whether there's more to print, or `null` if the print
+                /// was already complete.  Note that to properly terminate a print using
+                /// this function, you must call `next` even when `false`, but not `null`,
+                /// is returned.
+                pub fn seek(xprint: *XLine, index: usize) SeekError!?bool {
+                    // Erroneous inputs.
+                    if (index > xprint.marker.string.len) {
+                        return error.IndexTooLarge;
+                    } else if (xprint.cursor > index) {
+                        return error.BeforeIndex;
+                    }
+                    // Boundary conditions.
+                    switch (xprint.state) {
+                        .initial, .initial_consume => |tag| {
+                            const which = tag == .initial;
+                            _ = try xprint.setup(which);
+                        },
+                        .final => return null,
+                        else => {},
+                    }
+                    if (index == xprint.marker.string.len) {
+                        xprint.in_q.items = 0;
+                        xprint.out_q.items = 0;
+                        xprint.state = .final;
+                        xprint.cursor = index;
+                        return false;
+                    }
+
+                    // We need to handle both the in queue and the out queue:
+
+                    // The out queue needs to be stripped of anything which will
+                    // terminate (mark.final()) before our mark, and, when applicable,
+                    // those must be removed from the stacks as well.
+                    var seek_out = xprint.out_q.peek();
+                    while (seek_out) |out_mark| {
+                        if (out_mark.final() > index) {
+                            const color = xprint.markups.get(out_mark.kind);
+                            switch (color.style()) {
+                                .style => {},
+                                .foreground => removeMarkFrom(&xprint.fgs, out_mark),
+                                .background => removeMarkFrom(&xprint.bgs, out_mark),
+                                .underline => removeMarkFrom(&xprint.uls, out_mark),
+                            }
+                            _ = xprint.out_q.remove();
+                            seek_out = xprint.out_q.peek();
+                        } else break;
+                    }
+                    // Then we must do the same to the in queue, stacking up anything which
+                    // must be on when we resume, and dropping anything which needs dropping.
+                    // One wrinkle: we don't have a stack for styles, so we make one.
+                    var style_stack: ArrayListUnmanaged(Mark) = .empty;
+                    defer style_stack.deinit(xprint.allocator());
+                    // Start with this_mark, if present
+                    var maybe_mark = xprint.this_mark orelse xprint.in_q.removeOrNull();
+                    while (maybe_mark) |a_mark| {
+                        if (a_mark.offset >= index) {
+                            // We have our mark.
+                            xprint.this_mark = a_mark;
+                            xprint.state = .resume_print;
+                            xprint.cursor = index;
+                            for (style_stack.items) |style_mark| {
+                                try xprint.in_q.add(style_mark);
+                            }
+                            return true;
+                        }
+                        if (a_mark.final() > index) {
+                            const mark_color = xprint.markups.get(a_mark.kind);
+                            switch (mark_color.style()) {
+                                .style => {
+                                    // put it on the style queue
+                                    try style_stack.append(xprint.allocator(), a_mark);
+                                },
+                                .foreground => {
+                                    try xprint.fgs.append(xprint.allocator(), a_mark);
+                                },
+                                .background => {
+                                    try xprint.bgs.append(xprint.allocator(), a_mark);
+                                },
+                                .underline => {
+                                    try xprint.uls.append(xprint.allocator(), a_mark);
+                                },
+                            }
+                            try xprint.out_q.add(a_mark);
+                            maybe_mark = xprint.in_q.removeOrNull();
+                        } else {
+                            // We've completely passed this mark.
+                            maybe_mark = xprint.in_q.removeOrNull();
+                        }
+                    }
+                    // Getting here means we've emptied in_q, except maybe the style stack.
+                    assert(xprint.in_q.items == 0);
+                    for (style_stack.items) |style_mark| {
+                        try xprint.in_q.add(style_mark);
+                    }
+                    xprint.state = .resume_print;
+                    xprint.cursor = index;
+                    return true;
+                }
+
+                /// Drop the next line without printing it.  Answers `true`
+                /// if there are subsequent lines, `false` if it dropped the
+                /// last line, and `null` if there are no lines left to drop.
+                /// Note that to properly terminate a print using this function,
+                /// you must call `next` even when `false`, but not `null`,
+                /// is returned.
+                pub fn drop(xprint: *XLine) error{OutOfMemory}!?bool {
+                    const next_nl = std.mem.indexOfScalarPos(
+                        u8,
+                        xprint.marker.string,
+                        xprint.cursor,
+                        '\n',
+                    );
+                    if (next_nl) |nl_idx| {
+                        return xprint.seek(nl_idx + 2) catch |err| {
+                            switch (err) {
+                                error.BeforeIndex => unreachable,
+                                error.IndexTooLarge => {
+                                    // nl_idx + 1 always works because the max val is .len,
+                                    // which is legal.
+                                    return xprint.seek(nl_idx + 1) catch |err2| {
+                                        switch (err2) {
+                                            error.BeforeIndex, error.IndexTooLarge => unreachable,
+                                            error.OutOfMemory => |e| return e,
+                                        }
+                                    };
+                                },
+                                error.OutOfMemory => |e| return e,
+                            }
+                        };
+                    } else {
+                        xprint.state = .last;
+                        xprint.cursor = xprint.marker.string.len;
+                        return false;
+                    }
+                }
+
+                /// Drop the next `nlines` without printing them.  For further
+                /// details, see the documentation for `xprint.drop`.
+                pub fn dropN(xprint: *XLine, nlines: usize) error{OutOfMemory}!?bool {
+                    var drop_bool: ?bool = null;
+                    for (0..nlines) |_| {
+                        drop_bool = try xprint.drop();
+                    }
+                    return drop_bool;
+                }
+
+                fn setup(xprint: *XLine, clone: bool) error{OutOfMemory}!bool {
                     // Clone queue.
                     if (clone) {
                         xprint.in_q = try cloneQueue(xprint.marker.queue);
@@ -505,6 +659,66 @@ pub fn MarkedString(Kind: type) type {
                         xprint.next_index = xprint.marker.string.len;
                     }
                     return true;
+                }
+
+                fn resumePrint(xprint: *XLine) Error!bool {
+                    // Clean slate:
+                    try xprint.writer.writeAll("\x1b[0m");
+                    // Styles on the in_q?
+                    var maybe_back = xprint.in_q.peek();
+                    while (maybe_back) |back_mark| {
+                        if (back_mark.offset >= xprint.cursor) break;
+                        const back_color = xprint.markups.get(back_mark.kind);
+                        assert(back_color.style() == .style);
+                        try back_color.printOn(xprint.writer);
+                        _ = xprint.in_q.remove();
+                        maybe_back = xprint.in_q.peek();
+                    }
+                    // Anything on the stacks?
+                    const maybe_fg = xprint.fgs.getLastOrNull();
+                    if (maybe_fg) |fg_mark| {
+                        try xprint.markups.get(fg_mark.kind).printOn(xprint.writer);
+                    }
+                    const maybe_bg = xprint.bgs.getLastOrNull();
+                    if (maybe_bg) |bg_mark| {
+                        try xprint.markups.get(bg_mark.kind).printOn(xprint.writer);
+                    }
+                    const maybe_ul = xprint.uls.getLastOrNull();
+                    if (maybe_ul) |ul_mark| {
+                        try xprint.markups.get(ul_mark.kind).printOn(xprint.writer);
+                    }
+                    // Last, determine the state we need to be in.  The options are
+                    // write_to_this, write_to_next, and last, since the first two can
+                    // print a null string if they need to.
+                    const maybe_next = xprint.out_q.peek();
+                    if (xprint.this_mark) |the_mark| {
+                        if (maybe_next) |next_mark| {
+                            if (next_mark.final() >= the_mark.offset) {
+                                xprint.state = .write_to_this;
+                                xprint.next_index = the_mark.offset;
+                                return true;
+                            } else {
+                                xprint.state = .write_to_next;
+                                xprint.next_index = next_mark.final();
+                                return true;
+                            }
+                        } else {
+                            xprint.state = .write_to_this;
+                            xprint.next_index = the_mark.offset;
+                            return true;
+                        }
+                    } else {
+                        if (maybe_next) |next_mark| {
+                            xprint.state = .write_to_next;
+                            xprint.next_index = next_mark.final();
+                            return true;
+                        } else {
+                            xprint.state = .last;
+                            xprint.next_index = xprint.marker.string.len;
+                            return true;
+                        }
+                    }
+                    comptime unreachable;
                 }
 
                 fn printThisMark(xprint: *XLine) Error!bool {
@@ -638,12 +852,11 @@ pub fn MarkedString(Kind: type) type {
                     const did_line = try xprint.printUpTo();
                     if (did_line) {
                         // Check for final newline
-                        // zig fmt: off
-                        if (xprint.cursor == xprint.marker.string.len
-                        and xprint.marker.string[xprint.cursor - 1] == '\n') {
+                        if (xprint.cursor == xprint.marker.string.len and
+                            xprint.marker.string[xprint.cursor - 1] == '\n')
+                        {
                             xprint.state = .final;
                         }
-                        // zig fmt: on
                         return false;
                     }
                     xprint.state = .final;
@@ -668,9 +881,9 @@ pub fn MarkedString(Kind: type) type {
                             // the string length, so when these go beyond bounds, we
                             // cannot reach this code path.
                             if (b == '\r' and n == '\n') {
-                                xprint.cursor += 2;
+                                xprint.cursor += 3;
                             } else {
-                                xprint.cursor += 1;
+                                xprint.cursor += 2;
                             }
                             return true;
                         }
@@ -1101,10 +1314,10 @@ test "XLine" {
     const XLine = XColorMarker.XtermLineWriter(@TypeOf(&writer));
     var marked = XColorMarker.init(allocator, x_string);
     defer marked.deinit();
-    var xprint = try XLine.init(&marked, x_markups, &writer);
+    var xprint = XLine.init(&marked, x_markups, &writer);
     _ = try marked.matchAndMark(.red_italic_bold, reg_a);
     _ = try marked.matchAndMark(.green_underline, reg_1);
-    _ = try marked.findAndMark(.purple_curly_underline, "333");
+    // _ = try marked.findAndMark(.purple_curly_underline, "333");
     _ = try marked.findAndMark(.reset_italic, "333");
     _ = try marked.findAndMark(.green, "333");
     _ = try marked.matchAndMark(.tan_background, reg_paren);
@@ -1121,11 +1334,45 @@ test "XLine" {
         defer allocator.free(line);
         std.debug.print("{s}\n", .{line});
     }
+    std.debug.print("\n", .{});
     // Prints unmarked string properly.
     var empty_mark = XColorMarker.init(allocator, x_string);
     defer empty_mark.deinit();
-    try xprint.newText(&empty_mark);
+    xprint.newText(&empty_mark);
     while (try xprint.next()) |_| {
+        const line = try out_array.toOwnedSlice();
+        defer allocator.free(line);
+        std.debug.print("{s}\n", .{line});
+    }
+    std.debug.print("\n", .{});
+    // Seek tests
+    xprint.newText(&marked);
+    _ = try xprint.seek(6);
+    while (try xprint.next()) |_| {
+        const line = try out_array.toOwnedSlice();
+        defer allocator.free(line);
+        std.debug.print("{s}\n", .{line});
+    }
+    std.debug.print("\n", .{});
+    xprint.newText(&marked);
+    _ = try xprint.seek(25);
+    while (try xprint.next()) |_| {
+        const line = try out_array.toOwnedSlice();
+        defer allocator.free(line);
+        std.debug.print("{s}\n", .{line});
+    }
+    std.debug.print("\n", .{});
+    // Drop test
+    xprint.newText(&marked);
+    {
+        _ = try xprint.next();
+        const line = try out_array.toOwnedSlice();
+        defer allocator.free(line);
+        std.debug.print("{s}\n", .{line});
+        _ = try xprint.drop();
+    }
+    {
+        _ = try xprint.next();
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
         std.debug.print("{s}\n", .{line});

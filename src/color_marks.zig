@@ -341,7 +341,7 @@ pub const ColorValue = union(enum(u2)) {
                 try writer.print(":5:{d}m", .{color});
             },
             .rgb => |color| {
-                try writer.print(":2::{d}:{d}:{d}m", .{ color.r, color.g, color.b });
+                try writer.print(":2:{d}:{d}:{d}m", .{ color.r, color.g, color.b });
             },
         }
     }

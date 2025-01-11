@@ -102,9 +102,8 @@ pub fn XtermEncodedWriter(WriterType: type) type {
                                 count += try writer.write(bytes[cursor..idx]);
                                 idx += 1;
                                 // Convenient property: Codepoint value of C1s is just
-                                // the second byte.
-                                // TODO: we need symbols here too I think.
-                                try writer.print("\\u{{{x:0>2}}}", .{b1});
+                                // the second byte. Written in 'vi format' as e.g <80>
+                                try writer.print("<{x:0>2}>", .{b1});
                                 // \u{80} == 6 bytes
                                 count += 6;
                                 cursor = idx + 1;
