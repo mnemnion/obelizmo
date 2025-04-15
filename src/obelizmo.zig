@@ -7,7 +7,7 @@ const Order = std.math.Order;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 const encoded_writer = @import("encoded_writer.zig");
-const xcolors = @import("color_marks.zig");
+const xcolors = @import("colors");
 
 pub usingnamespace xcolors;
 
@@ -55,10 +55,10 @@ pub fn MarkedString(Kind: type) type {
 
         /// Queue for applying `Mark`s, type of the .queue field of a
         /// `MarkedString`.
-        pub const MarkQueue = PriorityQueue(Mark, void, compare);
+        pub const MarkQueue = PriorityQueue(Mark, void, compareInQueue);
 
         /// Queue for writing `Marks`.
-        pub const OutQueue = PriorityQueue(Mark, void, compareEnds);
+        pub const OutQueue = PriorityQueue(Mark, void, compareOutQueue);
 
         //| Allocate and Free
 
@@ -326,6 +326,8 @@ pub fn MarkedString(Kind: type) type {
                 writer: Writer,
                 marker: *const SMark,
                 markups: MarkupColorArray,
+                /// Represents the point in the marked string after printing.
+                cursor: usize = 0,
                 // The remaining fields are internal, and should
                 // not be considered stable API
                 in_q: MarkQueue,
@@ -334,7 +336,6 @@ pub fn MarkedString(Kind: type) type {
                 bgs: ArrayListUnmanaged(Mark),
                 uls: ArrayListUnmanaged(Mark),
                 state: PrintState = .initial,
-                cursor: usize = 0,
                 next_index: usize = 0,
                 this_mark: ?Mark = null,
 
@@ -457,14 +458,23 @@ pub fn MarkedString(Kind: type) type {
                 ///
                 /// These are those states:
                 const PrintState = enum {
+                    /// Initialize to consume the mark queue.
                     initial_consume,
+                    /// Initialize, cloning the mark queue.
                     initial,
+                    /// Resume printing after a seek or drop.
                     resume_print,
+                    /// Print this_mark.
                     this_mark,
+                    /// Write up to next_index, then print this_mark.
                     write_to_this,
+                    /// Write up to next_index, then print the next mark from out_q.
                     write_to_next,
+                    /// Print the next mark from out_q.
                     next_mark,
+                    /// Done with mark, just print lines.
                     last,
+                    /// Printing has completed.
                     final,
                 };
 
@@ -518,8 +528,8 @@ pub fn MarkedString(Kind: type) type {
                         else => {},
                     }
                     if (index == xprint.marker.string.len) {
-                        xprint.in_q.items = 0;
-                        xprint.out_q.items = 0;
+                        xprint.in_q.shrinkAndFree(0);
+                        xprint.out_q.shrinkAndFree(0);
                         xprint.state = .final;
                         xprint.cursor = index;
                         return false;
@@ -535,7 +545,7 @@ pub fn MarkedString(Kind: type) type {
                         if (out_mark.final() > index) {
                             const color = xprint.markups.get(out_mark.kind);
                             switch (color.style()) {
-                                .style => {},
+                                .effect => {},
                                 .foreground => removeMarkFrom(&xprint.fgs, out_mark),
                                 .background => removeMarkFrom(&xprint.bgs, out_mark),
                                 .underline => removeMarkFrom(&xprint.uls, out_mark),
@@ -546,9 +556,11 @@ pub fn MarkedString(Kind: type) type {
                     }
                     // Then we must do the same to the in queue, stacking up anything which
                     // must be on when we resume, and dropping anything which needs dropping.
-                    // One wrinkle: we don't have a stack for styles, so we make one.
-                    var style_stack: ArrayListUnmanaged(Mark) = .empty;
-                    defer style_stack.deinit(xprint.allocator());
+                    // One wrinkle: we don't have a stack for effects, so we make one.  These
+                    // are put back on the in_q, the restart function has special logic to
+                    // handle this condition.
+                    var effect_stack: ArrayListUnmanaged(Mark) = .empty;
+                    defer effect_stack.deinit(xprint.allocator());
                     // Start with this_mark, if present
                     var maybe_mark = xprint.this_mark orelse xprint.in_q.removeOrNull();
                     while (maybe_mark) |a_mark| {
@@ -557,7 +569,7 @@ pub fn MarkedString(Kind: type) type {
                             xprint.this_mark = a_mark;
                             xprint.state = .resume_print;
                             xprint.cursor = index;
-                            for (style_stack.items) |style_mark| {
+                            for (effect_stack.items) |style_mark| {
                                 try xprint.in_q.add(style_mark);
                             }
                             return true;
@@ -565,9 +577,9 @@ pub fn MarkedString(Kind: type) type {
                         if (a_mark.final() > index) {
                             const mark_color = xprint.markups.get(a_mark.kind);
                             switch (mark_color.style()) {
-                                .style => {
-                                    // put it on the style queue
-                                    try style_stack.append(xprint.allocator(), a_mark);
+                                .effect => {
+                                    // put it on the style stack
+                                    try effect_stack.append(xprint.allocator(), a_mark);
                                 },
                                 .foreground => {
                                     try xprint.fgs.append(xprint.allocator(), a_mark);
@@ -587,8 +599,8 @@ pub fn MarkedString(Kind: type) type {
                         }
                     }
                     // Getting here means we've emptied in_q, except maybe the style stack.
-                    assert(xprint.in_q.items == 0);
-                    for (style_stack.items) |style_mark| {
+                    assert(xprint.in_q.items.len == 0);
+                    for (effect_stack.items) |style_mark| {
                         try xprint.in_q.add(style_mark);
                     }
                     xprint.state = .resume_print;
@@ -603,6 +615,8 @@ pub fn MarkedString(Kind: type) type {
                 /// you must call `next` even when `false`, but not `null`,
                 /// is returned.
                 pub fn drop(xprint: *XLine) error{OutOfMemory}!?bool {
+                    if (xprint.state == .final) return null;
+
                     const next_nl = std.mem.indexOfScalarPos(
                         u8,
                         xprint.marker.string,
@@ -610,19 +624,10 @@ pub fn MarkedString(Kind: type) type {
                         '\n',
                     );
                     if (next_nl) |nl_idx| {
-                        return xprint.seek(nl_idx + 2) catch |err| {
+                        return xprint.seek(nl_idx + 1) catch |err| {
                             switch (err) {
-                                error.BeforeIndex => unreachable,
-                                error.IndexTooLarge => {
-                                    // nl_idx + 1 always works because the max val is .len,
-                                    // which is legal.
-                                    return xprint.seek(nl_idx + 1) catch |err2| {
-                                        switch (err2) {
-                                            error.BeforeIndex, error.IndexTooLarge => unreachable,
-                                            error.OutOfMemory => |e| return e,
-                                        }
-                                    };
-                                },
+                                // String.len is valid, so neither of these can happen:
+                                error.BeforeIndex, error.IndexTooLarge => unreachable,
                                 error.OutOfMemory => |e| return e,
                             }
                         };
@@ -642,6 +647,8 @@ pub fn MarkedString(Kind: type) type {
                     }
                     return drop_bool;
                 }
+
+                //| Implementation details (not part of API)
 
                 fn setup(xprint: *XLine, clone: bool) error{OutOfMemory}!bool {
                     // Clone queue.
@@ -669,16 +676,20 @@ pub fn MarkedString(Kind: type) type {
                     while (maybe_back) |back_mark| {
                         if (back_mark.offset >= xprint.cursor) break;
                         const back_color = xprint.markups.get(back_mark.kind);
-                        assert(back_color.style() == .style);
+                        assert(back_color.style() == .effect);
                         try back_color.printOn(xprint.writer);
                         _ = xprint.in_q.remove();
                         maybe_back = xprint.in_q.peek();
                     }
                     // Anything on the stacks?
-                    const maybe_fg = xprint.fgs.getLastOrNull();
-                    if (maybe_fg) |fg_mark| {
+
+                    // Because foreground colors might carry styles,
+                    // and styles (e.g. italic) carry over into other colors,
+                    // we apply everything we have, from bottom to top.
+                    for (xprint.fgs.items) |fg_mark| {
                         try xprint.markups.get(fg_mark.kind).printOn(xprint.writer);
                     }
+                    // Background and underline only need to print the latest, if any.
                     const maybe_bg = xprint.bgs.getLastOrNull();
                     if (maybe_bg) |bg_mark| {
                         try xprint.markups.get(bg_mark.kind).printOn(xprint.writer);
@@ -729,7 +740,7 @@ pub fn MarkedString(Kind: type) type {
                     try this_color.printOn(xprint.writer);
                     // Push to correct stack
                     switch (this_color.style()) {
-                        .style => {},
+                        .effect => {},
                         .foreground => {
                             try xprint.fgs.append(xprint.allocator(), mark);
                         },
@@ -784,7 +795,7 @@ pub fn MarkedString(Kind: type) type {
                     // Add assertion that cursor is correct (complex due to newlines)
                     const next_color = xprint.markups.get(next_mark.kind);
                     switch (next_color.style()) {
-                        .style => {
+                        .effect => {
                             try next_color.printOff(xprint.writer);
                         },
                         .foreground => {
@@ -881,9 +892,9 @@ pub fn MarkedString(Kind: type) type {
                             // the string length, so when these go beyond bounds, we
                             // cannot reach this code path.
                             if (b == '\r' and n == '\n') {
-                                xprint.cursor += 3;
-                            } else {
                                 xprint.cursor += 2;
+                            } else {
+                                xprint.cursor += 1;
                             }
                             return true;
                         }
@@ -921,9 +932,9 @@ pub fn MarkedString(Kind: type) type {
         /// span or such.  Every mark is begun and ended once, with no
         /// logic to restart an outer span once an inner span is closed,
         /// as is necessary to get good results printing to a terminal.
-        /// For that purpose, use `writeAsStream`.  Note that this must
-        /// be called with an `EncodedWriter`, or some type offering
-        /// compatible functions.
+        /// For that purpose, use an `XtermLineWriter`.  See `EncodedWriter`
+        /// for information on how to escape the string text for your format.
+        /// For HTML, an HTMLEncodedWriter is provided.
         pub fn writeAsTree(
             marker: *const SMark,
             writer: anytype,
@@ -1022,7 +1033,7 @@ pub fn MarkedString(Kind: type) type {
         /// all later marks, with all longer marks before shorter
         /// ones.  Ties are broken by enum order, this is somewhat
         /// arbitrary, but at least predictable.
-        fn compare(_: void, left: Mark, right: Mark) Order {
+        fn compareInQueue(_: void, left: Mark, right: Mark) Order {
             if (left.offset < right.offset) {
                 return Order.lt;
             } else if (left.offset > right.offset) {
@@ -1046,7 +1057,7 @@ pub fn MarkedString(Kind: type) type {
         /// that two different enums of the same offset and len
         /// will be applied in the correct order, such that one
         /// nests within the other.
-        fn compareEnds(_: void, left: Mark, right: Mark) Order {
+        fn compareOutQueue(_: void, left: Mark, right: Mark) Order {
             const l_final = left.final();
             const r_final = right.final();
             if (l_final < r_final) {
@@ -1292,11 +1303,10 @@ const x_markups = XColorArray.init(
 );
 
 const x_string =
-    \\ aaa111333111aaa
+    \\aaa111333111aaa
+    \\(foo bar bazbux) quux
+    \\---|||!!!|||---
     \\
-    \\ (foo bar bazbux) quux
-    \\
-    \\ ---|||!!!|||---
     \\
 ;
 
@@ -1334,7 +1344,6 @@ test "XLine" {
         defer allocator.free(line);
         std.debug.print("{s}\n", .{line});
     }
-    std.debug.print("\n", .{});
     // Prints unmarked string properly.
     var empty_mark = XColorMarker.init(allocator, x_string);
     defer empty_mark.deinit();
@@ -1344,7 +1353,6 @@ test "XLine" {
         defer allocator.free(line);
         std.debug.print("{s}\n", .{line});
     }
-    std.debug.print("\n", .{});
     // Seek tests
     xprint.newText(&marked);
     _ = try xprint.seek(6);
@@ -1353,7 +1361,6 @@ test "XLine" {
         defer allocator.free(line);
         std.debug.print("{s}\n", .{line});
     }
-    std.debug.print("\n", .{});
     xprint.newText(&marked);
     _ = try xprint.seek(25);
     while (try xprint.next()) |_| {
@@ -1361,7 +1368,6 @@ test "XLine" {
         defer allocator.free(line);
         std.debug.print("{s}\n", .{line});
     }
-    std.debug.print("\n", .{});
     // Drop test
     xprint.newText(&marked);
     {
@@ -1377,4 +1383,8 @@ test "XLine" {
         defer allocator.free(line);
         std.debug.print("{s}\n", .{line});
     }
+    // Safe to drop too many lines
+    xprint.newText(&marked);
+    _ = try xprint.dropN(15);
+    try expectEqual(null, xprint.next());
 }

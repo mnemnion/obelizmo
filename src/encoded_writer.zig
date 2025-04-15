@@ -1,5 +1,20 @@
+//! EncodedWriter
+//!
+//! Most formats of interest targeted by `obelizmo` also call for some changes to
+//! the text itself.  HTML, for instance, requires transformation of `<` to `&lt;`,
+//! and so on, terminal printing may be spoofed if control sequences are printed directly,
+//! and so on.
+//!
+//! EncodedWriter is a specialized writer which allows for this.  In addition to a subset
+//! of Writer inteface functions used by Obelizmo writers (write, writeAll, and print), it
+//! needs a writeEncode function.  This is called for any spans of bare text between marks.
+//!
+//! Included are EncodedWriters for Xterm-style terminal printing, and for HTML escaping.
+//! The latter does not attempt to ampersand-encode non-mandatory characters, but will allow
+//! properly formed ampersand entities through without re-encoding them.
+
 const std = @import("std");
-const ErrorOf = @import("color_marks.zig").ErrorOf;
+const ErrorOf = @import("colors").ErrorOf;
 
 /// Returns a type which wraps another Writer, and takes a pointer to a
 /// function for performing encoded writes.  An instance of this type

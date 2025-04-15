@@ -1,20 +1,46 @@
-//! An enum union representing colors and where they apply.
+//! A module for applying terminal styles in the SGR series.
+//!
+//! All types in this module are public, but direct construction of
+//! these types is not recommended.  Instead, the interface documented
+//! below should be preferred.
 //!
 //! The main type here is `Color`, which is used in a somewhat broad
 //! sense.  These come in four varieties, represented as an enum,
 //! `StyleClass`: `.foreground`, `.background`, `.underline`, and
-//! `.style`.  The style class of a Color may be determined by calling
+//! `.effect`.  The style class of a Color may be determined by calling
 //! `a_color.style()`.
 //!
-//! `.background` and `.underline` take ColorValues, which can be the
-//! default color, a simple color (the original set), a 256 palette
-//! color, or an RGB triple.  These are created with:
+//! To apply a Color, call `color.printOn(writer)`, to cancel its effect,
+//! call `color.printOff(writer)`.  To properly nest text attributes, use
+//! `obelizmo` with `XTermLineWriter`.
+//!
+//! Colors, proper, are created with ColorValues.  These can be the
+//! default color, a simple color (the original set of eight), a 256
+//! palette color, or an RGB triple.  The basic-color functions take
+//! an enum of the familiar color names, 256 receives one byte, and rgb,
+//! three.
+//!
+//! Due to obscurity, and lack of any real reason to, the 'high eight'
+//! "aixcolor" sequences are not supported.  At this time the existence
+//! of terminals which would benefit from that support is entirely
+//! hypothetical.  In the unlikely situation where one is supporting an
+//! 88 color palette, use the `256` functions with no paramater larger
+//! than 87.
+//!
+//! Almost always, the palette colors 8-15 are identical with the high eight
+//! colors mentioned above.  However their distinct sequences cannot be
+//! printed using this library.
+//!
+//! For .background and .underline, Colors are created with:
 //!
 //! - `bgDefault`, `bgBasic`, `bg256`, and `bgRgb`
 //! - `ulDefault`, `ulBasic`, `ul256`, and `ulRgb`
 //!
 //! The latter set take, as a first argument, an `UnderlineStyle`:
-//! `.single`, `.double`, `.curly`, `.dashed`, and `.dotted`.
+//! `.single`, `.double`, `.curly`, `.dashed`, and `.dotted`.  Note
+//! that `.single` is more broadly supported than the others, and
+//! should be created with `ulDefault` if maximum compatiblity is
+//! a goal.
 //!
 //! Foreground colors are created similarly, with an additional
 //! function available:
@@ -30,8 +56,9 @@
 //!   `overLine`, `superScript`, or `subScript`
 //!
 //! When `fgStyle` is used, these modifiers will be applied without
-//! changing the foreground style.  This also makes it usable as a dummy
-//! Color, for any occasion where that may be useful.
+//! changing the foreground color. `fgStyle()` without any styles applied
+//! becomes a dummy Color, which will print nothing for on or off.  For
+//! another example, a bold 'color' is `fgStyle().bold()`.
 //!
 //! For implementation reasons, `superScript` will override `subScript` and
 //! vice versa, but if both `bold` and `faint` are set, the result will be
@@ -40,11 +67,11 @@
 //! Calling these modifier functions on any color where `color.style() !=
 //! .foreground` will result in a panic.
 //!
-//! The `.style` class is a catch-all containing `.invisible`, `.inverse`,
+//! The `.effect` class is a catch-all containing `.invisible`, `.inverse`,
 //! and `.reset`.  These are stylings where it doesn't make sense to include
 //! a color, and may be created with `invisible`, `inverse`, and `reset`.
 //!
-//! `.reset` will reset everything.  To make it more specific, you can call
+//! `reset()` will reset everything.  To make it more specific, you can call
 //! the following modifier functions:
 //!
 //! - `neutral`, `upright`, `steady`, `baseline`, `resetForeground`,
@@ -52,20 +79,21 @@
 //!
 //! The first four being: neither bold nor faint, not italic, not blinking,
 //! not super- or subscripted, respectively.  If any of these modifiers are
-//! called, only the requested resets will be performed.
+//! called, only the specified resets will be performed.
 //!
-//! Calling `printOff` on a reset Color is a no-op.  As with foreground,
-//! calling any of the above modifier functions on any other color will panic.
+//! Resets are applied with `printOn`, calling `printOff` on a reset Color
+//! is a no-op.  As with foreground, calling any of the above modifier
+//! functions on any other color style will panic.
 //!
 //! Not every terminal will support all of these options, but unrecognized
 //! codes are ignored, so the worst that can happen is that a style will not
-//! be applied.  One may use `terminfo` or a terminal query to determine what
-//! is and isn't supported, but doing so is out of scope for `obelizmo`.
+//! appear on screen.  As there are many terminals, and the state of the art
+//! is a moving target, no broad attempt to classify the relative rarity of
+//! these sequences would be productive.
 //!
-
-//| TODO: maybe add 'neutral', 'steady', and 'baseline', which
-//| have the effect of not-bold-or-faint, not-blinking, and not-italic-
-//| or-sub-or-superscript, respectively.
+//! One may use `terminfo` or a terminal query to determine what is and isn't
+//! supported, but doing so is out of scope for `obelizmo`.
+//!
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -73,7 +101,8 @@ const assert = std.debug.assert;
 //| Builder functions
 
 /// Create a foreground for a style-only effect.
-/// Example: fgStyle().bold().
+/// Example: fgStyle().bold().  Called by itself, the
+/// `Color` will do nothing when printed.
 pub fn fgStyle() Color {
     return Color{
         .foreground = .{
@@ -118,11 +147,7 @@ pub fn fgRgb(r: u8, g: u8, b: u8) Color {
     return Color{
         .foreground = .{
             .color = .{
-                .rgb = .{
-                    .r = r,
-                    .g = g,
-                    .b = b,
-                },
+                .rgb = .{ .r = r, .g = g, .b = b },
             },
         },
     };
@@ -217,12 +242,9 @@ pub fn ul256(ul: UnderlineStyle, palette: u8) Color {
 /// Create an RGB underline color
 pub fn ulRgb(ul: UnderlineStyle, r: u8, g: u8, b: u8) Color {
     const shade = ColorValue{
-        .rgb = .{
-            .r = r,
-            .g = g,
-            .b = b,
-        },
+        .rgb = .{ .r = r, .g = g, .b = b },
     };
+
     switch (ul) {
         .single => return Color{
             .underline = shade,
@@ -242,17 +264,17 @@ pub fn ulRgb(ul: UnderlineStyle, r: u8, g: u8, b: u8) Color {
     }
 }
 
-/// Create an inverse style.
+/// Create an inverse effect.
 pub fn inverse() Color {
     return .inverse;
 }
 
-/// Create an invisible style.
+/// Create an invisible effect.
 pub fn invisible() Color {
     return .invisible;
 }
 
-/// Create a reset style.
+/// Create a reset effect.
 pub fn reset() Color {
     return .{ .reset = .{} };
 }
@@ -284,7 +306,7 @@ pub const StyleClass = enum {
     foreground,
     background,
     underline,
-    style,
+    effect,
 };
 
 pub const BasicColor = enum(u4) {
@@ -579,7 +601,7 @@ pub const Color = union(ColorAttribute) {
             .inverse,
             .invisible,
             .reset,
-            => return .style,
+            => return .effect,
             .foreground, .superscript, .subscript => return .foreground,
             .background => return .background,
         }

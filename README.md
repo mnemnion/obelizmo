@@ -8,6 +8,16 @@ The goal of `obelizmo` is to provide a performant and output-agnostic way to mar
 
 This library is entirely usable at present for its main focus, which is terminal printing.  I'm reasonably happy with the structure of the marked strings, and the collection of methods for marking them is acceptably featureful.  Printing with ANSI/SGR is fully implemented, with proper handling of nested regions and a color builder.  Printing in HTML is... possible, and might be good enough for your purposes.  I have a long-term goal to come up with a really nice solution there, but it wasn't the primary application of interest.
 
+## Install
+
+Using the Zig build system:
+
+```sh
+git fetch --save https://www.github.com/mnemnion/obelizmo/archive/refs/tags/v0.1.0.tar.gz
+```
+
+The package offers two modules, `obezlimo` itself and [colors](#the-colors-module).  Obelizmo works in two stages: marking strings, and printing them.
+
 ## Marking Strings
 
 To use the library, define an `enum` of all the categories of markup you intend to use.  A simple example:
@@ -51,7 +61,7 @@ Also worth knowing: if you mark a single region repeatedly, the lower-valued enu
 
 ### Direct Marking
 
-The simplest option is to specify either a slice, or an offset and length, to mark.
+The simplest option is to specify either slice bounds, or an offset and length, to mark.
 
 ```zig
 try string_marker.markSlice(.red, a, b) catch |e| {
@@ -66,7 +76,7 @@ try string_marker.markFrom(.blue, a, 7); // Same error set as markSlice
 
 ### Find and Mark
 
-Another way to mark the string is using the find functions, which work like their equivalents in [std.mem](https://ziglang.org/documentation/master/std/#std.mem.indexOf).  These return the index if a mark was applied, or `null` otherwise, and can only fail to allocate.
+Another way to mark the string is using the find functions, which work like their equivalents in [std.mem](https://ziglang.org/documentation/master/std/#std.mem.indexOf).  These return the starting index if a mark was applied, or `null` otherwise, and can only fail to allocate.
 
 ```zig
 const first_err: usize = try string_marker.findAndMark(.red, "ERROR:").?;
@@ -105,7 +115,7 @@ const removed_mark: ?Mark = string_marker.removeMark(.yellow);
 while (string_marker.removeMark(.red)) |_| {}
 ```
 
-Since `obelizmo` uses a heap to store marks, the `while` loop above is roughly as efficient as it can be at removing all such marks.  While it's possible to remove the first or last mark of a kind as ordered on the string, with a linear search, this is not currently included as it's unlikely to prove useful.  I'm willing to add it if someone has a demonstrable use case for this.
+Since `obelizmo` uses a heap to store marks, the `while` loop above is roughly as efficient as it can be at removing all such marks.  While it's possible to remove the first or last mark of a kind as ordered on the string, with a linear search, this is not currently included as it's unlikely to prove useful.
 
 ## Printing
 
@@ -135,5 +145,17 @@ while (try xprint.next()) |more| {
 }
 ```
 Foreground, background, and underline colors, are kept on separate stacks, and will restart automatically at the end of any given marked region.  You can keep the `xprint` around for later, and provide a fresh `MarkedString` with `xprint.newText(&marked_string)`.
+
+It is also possible to drop some amount of the marked text.  The `XtermLinePrinter` will properly track styles, so that, for instance, if printing picks up in the middle of a red italic foreground section, without printing the beginning, that text will be italic and red.  This may be done with `try x_print.seek(n)`, where `n` is greater than the currently printed text (this number is `x_print.cursor`) and less than the length of the marked string.  Alternately, text up to the next newline can be dropped with `x_print.drop`, or any number of lines with `x_print.dropN`.  It is not required that the indicated number of lines still exist to be printed, however, `xprint.next` must be called at least one more time to guarantee that any applied `Color` styles are properly ended.
+
+And what is a `Color`, you might fairly ask?
+
+## The `colors` module
+
+Obelizmo includes a standalone module, "colors", which primarily features `Color`, a union which allows the full proliferation of SGR-compatible text attributes to be created and wielded in an `obelizmo`-friendly manner.  The preferred way to use this module is via the included builder functions, as documented in the container doc comment at `src/color_marks`.
+
+Though provided for independent use, on the premise that this might be useful, the `colors` module is fully `usingnamespace`-included in the `obelizmo` module, such that any declaration in `colors` may be used directly.
+
+## Fin
 
 That's Obeli⚡️mo.  Mark a string, print it.

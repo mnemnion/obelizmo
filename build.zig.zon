@@ -1,5 +1,9 @@
 .{
-    .name = "obelizmo",
+    .name = .obelizmo,
+
+    .fingerprint = 0x662d083b46632600,
+
+    .minimum_zig_version = "0.14.0",
 
     // This is a [Semantic Version](https://semver.org/).
     .version = "0.0.1",

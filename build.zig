@@ -12,6 +12,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Export colors module separately, to be available for @import("colors") in user code
+    const colors_module = b.addModule("colors", .{
+        .root_source_file = b.path("src/color_marks.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    obelizmo_module.addImport("colors", colors_module);
+
     const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
 
     // Creates a step for unit testing. This only builds the test executable
@@ -22,6 +31,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .filters = test_filters,
     });
+
+    lib_unit_tests.root_module.addImport("colors", colors_module);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
