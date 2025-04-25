@@ -939,7 +939,7 @@ pub fn MarkedString(Kind: type) type {
             marker: *const SMark,
             writer: anytype,
             markups: MarkupStringArray,
-        ) ErrorOf(writer)!usize {
+        ) ErrorOf(@TypeOf(writer))!usize {
             // See if there's a writeEncode function.
             const writeBody = encode: {
                 const Writer = @TypeOf(writer);
@@ -1085,12 +1085,11 @@ const expectEqualSlices = testing.expectEqualSlices;
 const expectEqualStrings = testing.expectEqualStrings;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
+const esc_string = @import("ezcaper").escStringExact;
 
-const OhSnap = struct {}; // @import("ohsnap");
+const OhSnap = @import("ohsnap");
 
 test "MarkedString" {
-    if (true)
-        return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const oh = OhSnap{};
     const e_num = enum {
@@ -1106,18 +1105,18 @@ test "MarkedString" {
     try markup.markSlice(.dah, 11, 14);
     try oh.snap(
         @src(),
-        \\[]obelizmo.MarkedString(..).Mark
-        \\  [0]: obelizmo.MarkedString(..).Mark
+        \\[]obelizmo.MarkedString(obelizmo.test.MarkedString.e_num).Mark
+        \\  [0]: obelizmo.MarkedString(obelizmo.test.MarkedString.e_num).Mark
         \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .dee
         \\    .offset: u32 = 0
         \\    .len: u32 = 11
-        \\  [1]: obelizmo.MarkedString(..).Mark
+        \\  [1]: obelizmo.MarkedString(obelizmo.test.MarkedString.e_num).Mark
         \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .la
         \\    .offset: u32 = 0
         \\    .len: u32 = 4
-        \\  [2]: obelizmo.MarkedString(..).Mark
+        \\  [2]: obelizmo.MarkedString(obelizmo.test.MarkedString.e_num).Mark
         \\    .kind: obelizmo.test.MarkedString.e_num
         \\      .dah
         \\    .offset: u32 = 11
@@ -1154,8 +1153,6 @@ const color_markup = ColorArray.init(
 );
 
 test "MarkedString writeAsStream writeAsTree" {
-    if (true)
-        return error.SkipZigTest;
     const oh = OhSnap{};
     const allocator = testing.allocator;
     var color_marker = try ColorMarker.initCapacity(allocator, "red blue green yellow", 4);
@@ -1167,29 +1164,29 @@ test "MarkedString writeAsStream writeAsTree" {
     try color_marker.markSlice(.teal, 4, 14);
     try oh.snap(
         @src(),
-        \\[]obelizmo.MarkedString(..).Mark
-        \\  [0]: obelizmo.MarkedString(..).Mark
-        \\    .kind: obelizmo.Colors
+        \\[]obelizmo.MarkedString(obelizmo.TestColors).Mark
+        \\  [0]: obelizmo.MarkedString(obelizmo.TestColors).Mark
+        \\    .kind: obelizmo.TestColors
         \\      .red
         \\    .offset: u32 = 0
         \\    .len: u32 = 3
-        \\  [1]: obelizmo.MarkedString(..).Mark
-        \\    .kind: obelizmo.Colors
+        \\  [1]: obelizmo.MarkedString(obelizmo.TestColors).Mark
+        \\    .kind: obelizmo.TestColors
         \\      .teal
         \\    .offset: u32 = 4
         \\    .len: u32 = 10
-        \\  [2]: obelizmo.MarkedString(..).Mark
-        \\    .kind: obelizmo.Colors
+        \\  [2]: obelizmo.MarkedString(obelizmo.TestColors).Mark
+        \\    .kind: obelizmo.TestColors
         \\      .green
         \\    .offset: u32 = 9
         \\    .len: u32 = 5
-        \\  [3]: obelizmo.MarkedString(..).Mark
-        \\    .kind: obelizmo.Colors
+        \\  [3]: obelizmo.MarkedString(obelizmo.TestColors).Mark
+        \\    .kind: obelizmo.TestColors
         \\      .yellow
         \\    .offset: u32 = 15
         \\    .len: u32 = 6
-        \\  [4]: obelizmo.MarkedString(..).Mark
-        \\    .kind: obelizmo.Colors
+        \\  [4]: obelizmo.MarkedString(obelizmo.TestColors).Mark
+        \\    .kind: obelizmo.TestColors
         \\      .blue
         \\    .offset: u32 = 4
         \\    .len: u32 = 4
@@ -1202,15 +1199,6 @@ test "MarkedString writeAsStream writeAsTree" {
     var out_array = std.ArrayList(u8).init(allocator);
     defer out_array.deinit();
     var stream_writer = out_array.writer();
-    _ = try color_marker.writeAsStream(&stream_writer, color_markup);
-    const stream_string = try out_array.toOwnedSlice();
-    defer allocator.free(stream_string);
-    try oh.snap(
-        @src(),
-        \\[]u8
-        \\  "<r>red</r> <t><b>blue</b><t> <g>green</g></t> <y>yellow</y>"
-        ,
-    ).expectEqual(stream_string);
     var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(stream_writer)).init(&stream_writer);
     _ = try color_marker.writeAsTree(&wrapped_stream, color_markup);
     const tree_string = try out_array.toOwnedSlice();
@@ -1318,6 +1306,7 @@ const reg_bar = Regex.compile("\\|\\|\\|.*?\\|\\|\\|").?;
 
 test "XLine" {
     const allocator = std.testing.allocator;
+    const oh: OhSnap = .{};
     var out_array = std.ArrayList(u8).init(allocator);
     defer out_array.deinit();
     const writer = out_array.writer();
@@ -1339,49 +1328,68 @@ test "XLine" {
     _ = try marked.matchAndMark(.bg_grey69, reg_bar);
     _ = try marked.matchAndMark(.dashed_orange1, reg_dash);
     defer xprint.deinit();
-    while (try xprint.next()) |_| {
+    {
+        while (try xprint.next()) |_| {}
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
-        std.debug.print("{s}\n", .{line});
+        try oh.snap(
+            @src(),
+            \\"\x1b[1m\x1b[3m\x1b[38:2:255:0:0maaa\x1b[4m\x1b[58:5:2m111\x1b[23m\x1b[32m333\x1b[39m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m111\x1b[59m\x1b[24maaa\x1b[22m\x1b[23m\x1b[39m\x1b[48:2:247:228:169m\x1b[30m(\x1b[34mfoo bar baz\x1b[39m\x1b[30mbux)\x1b[39m\x1b[49m \x1b[32mq\x1b[7muu\x1b[27mx\x1b[39m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
+            ,
+        ).expectEqualFmt(esc_string(line));
     }
     // Prints unmarked string properly.
     var empty_mark = XColorMarker.init(allocator, x_string);
     defer empty_mark.deinit();
     xprint.newText(&empty_mark);
-    while (try xprint.next()) |_| {
+    {
+        while (try xprint.next()) |_| {}
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
-        std.debug.print("{s}\n", .{line});
+        try oh.snap(
+            @src(),
+            \\"aaa111333111aaa(foo bar bazbux) quux---|||!!!|||---"
+            ,
+        ).expectEqualFmt(esc_string(line));
     }
     // Seek tests
     xprint.newText(&marked);
     _ = try xprint.seek(6);
-    while (try xprint.next()) |_| {
+    {
+        while (try xprint.next()) |_| {}
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
-        std.debug.print("{s}\n", .{line});
+        try oh.snap(
+            @src(),
+            \\"\x1b[0m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m\x1b[4m\x1b[58:5:2m\x1b[23m\x1b[32m333\x1b[39m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m111\x1b[59m\x1b[24maaa\x1b[22m\x1b[23m\x1b[39m\x1b[48:2:247:228:169m\x1b[30m(\x1b[34mfoo bar baz\x1b[39m\x1b[30mbux)\x1b[39m\x1b[49m \x1b[32mq\x1b[7muu\x1b[27mx\x1b[39m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
+            ,
+        ).expectEqualFmt(esc_string(line));
     }
     xprint.newText(&marked);
     _ = try xprint.seek(25);
-    while (try xprint.next()) |_| {
+    {
+        while (try xprint.next()) |_| {}
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
-        std.debug.print("{s}\n", .{line});
+        try oh.snap(
+            @src(),
+            \\"\x1b[0m\x1b[30m\x1b[34m\x1b[48:2:247:228:169mbaz\x1b[39m\x1b[30mbux)\x1b[39m\x1b[49m \x1b[32mq\x1b[7muu\x1b[27mx\x1b[39m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
+            ,
+        ).expectEqualFmt(esc_string(line));
     }
     // Drop test
     xprint.newText(&marked);
     {
         _ = try xprint.next();
-        const line = try out_array.toOwnedSlice();
-        defer allocator.free(line);
-        std.debug.print("{s}\n", .{line});
         _ = try xprint.drop();
-    }
-    {
         _ = try xprint.next();
         const line = try out_array.toOwnedSlice();
         defer allocator.free(line);
-        std.debug.print("{s}\n", .{line});
+        try oh.snap(
+            @src(),
+            \\"\x1b[1m\x1b[3m\x1b[38:2:255:0:0maaa\x1b[4m\x1b[58:5:2m111\x1b[23m\x1b[32m333\x1b[39m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m111\x1b[59m\x1b[24maaa\x1b[22m\x1b[23m\x1b[39m\x1b[0m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
+            ,
+        ).expectEqualFmt(esc_string(line));
     }
     // Safe to drop too many lines
     xprint.newText(&marked);

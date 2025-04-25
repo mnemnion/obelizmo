@@ -40,8 +40,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     })) |ohsnap_dep| {
-        // lib_unit_tests.root_module.addImport("ohsnap", ohsnap_dep.module("ohsnap"));
-        _ = ohsnap_dep;
+        lib_unit_tests.root_module.addImport("ohsnap", ohsnap_dep.module("ohsnap"));
+    }
+
+    if (b.lazyDependency("ezcaper", .{
+        .target = target,
+        .optimize = optimize,
+    })) |ezcaper_dep| {
+        lib_unit_tests.root_module.addImport("ezcaper", ezcaper_dep.module("ezcaper"));
     }
 
     if (b.lazyDependency("mvzr", .{
