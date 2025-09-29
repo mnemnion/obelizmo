@@ -13,7 +13,7 @@ This library is entirely usable at present for its main focus, which is terminal
 Using the Zig build system:
 
 ```sh
-zig fetch --save https://www.github.com/mnemnion/obelizmo/archive/refs/tags/v0.1.0.tar.gz
+zig fetch --save https://www.github.com/mnemnion/obelizmo/archive/refs/tags/v0.1.2.tar.gz
 ```
 
 The package offers two modules, `obezlimo` itself and [colors](#the-colors-module).  Obelizmo works in two stages: marking strings, and printing them.
@@ -153,8 +153,6 @@ And what is a `Color`, you might fairly ask?
 ## The `colors` module
 
 Obelizmo includes a standalone module, "colors", which primarily features `Color`, a union which allows the full proliferation of SGR-compatible text attributes to be created and wielded in an `obelizmo`-friendly manner.  The preferred way to use this module is via the included builder functions, as documented in the container doc comment at `src/color_marks`.
-
-Though provided for independent use, on the premise that this might be useful, the `colors` module is fully `usingnamespace`-included in the `obelizmo` module, such that any declaration in `colors` may be used directly.
 
 ## Fin
 

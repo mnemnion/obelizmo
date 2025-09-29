@@ -9,8 +9,6 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const encoded_writer = @import("encoded_writer.zig");
 const xcolors = @import("colors");
 
-pub usingnamespace xcolors;
-
 pub const Color = xcolors.Color;
 pub const ErrorOf = xcolors.ErrorOf;
 
@@ -125,7 +123,7 @@ pub fn MarkedString(Kind: type) type {
             start: usize,
             end: usize,
         ) error{OutOfMemory}!void {
-            assert(start < end and end <= marker.string.len);
+            assert(start <= end and end <= marker.string.len);
             const the_mark = Mark{
                 .kind = mark,
                 .offset = @intCast(start),
@@ -1085,7 +1083,7 @@ const expectEqualSlices = testing.expectEqualSlices;
 const expectEqualStrings = testing.expectEqualStrings;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
-const esc_string = @import("ezcaper").escStringExact;
+const esc_string = @import("ezcaper").escStringExactQuoted;
 
 const OhSnap = @import("ohsnap");
 
@@ -1196,12 +1194,12 @@ test "MarkedString writeAsStream writeAsTree" {
         color_marker.queue.items[1].final(),
         color_marker.queue.items[2].final(),
     );
-    var out_array = std.ArrayList(u8).init(allocator);
-    defer out_array.deinit();
-    var stream_writer = out_array.writer();
+    var out_array: std.ArrayList(u8) = .empty;
+    defer out_array.deinit(allocator);
+    var stream_writer = out_array.writer(allocator);
     var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(stream_writer)).init(&stream_writer);
     _ = try color_marker.writeAsTree(&wrapped_stream, color_markup);
-    const tree_string = try out_array.toOwnedSlice();
+    const tree_string = try out_array.toOwnedSlice(allocator);
     defer allocator.free(tree_string);
     try oh.snap(
         @src(),
@@ -1227,11 +1225,11 @@ test "MarkedString regex" {
     try expect(try color_marker.matchAndMarkAll(.red, alpha_regex));
     const u_regex = Regex.compile("u").?;
     try expectEqual(9, try color_marker.matchAndMarkPos(.yellow, 5, u_regex));
-    var out_array = std.ArrayList(u8).init(allocator);
-    defer out_array.deinit();
-    var writer = out_array.writer();
+    var out_array: std.ArrayList(u8) = .empty;
+    defer out_array.deinit(allocator);
+    var writer = out_array.writer(allocator);
     _ = try color_marker.writeAsStream(&writer, color_markup);
-    const stream_string = try out_array.toOwnedSlice();
+    const stream_string = try out_array.toOwnedSlice(allocator);
     defer allocator.free(stream_string);
     try oh.snap(
         @src(),
@@ -1241,7 +1239,7 @@ test "MarkedString regex" {
     ).expectEqual(stream_string);
     var wrapped_writer = encoded_writer.DefaultEncodedWriter(@TypeOf(writer)).init(&writer);
     _ = try color_marker.writeAsTree(&wrapped_writer, color_markup);
-    const tree_string = try out_array.toOwnedSlice();
+    const tree_string = try out_array.toOwnedSlice(allocator);
     defer allocator.free(tree_string);
     try oh.snap(
         @src(),
@@ -1307,9 +1305,9 @@ const reg_bar = Regex.compile("\\|\\|\\|.*?\\|\\|\\|").?;
 test "XLine" {
     const allocator = std.testing.allocator;
     const oh: OhSnap = .{};
-    var out_array = std.ArrayList(u8).init(allocator);
-    defer out_array.deinit();
-    const writer = out_array.writer();
+    var out_array: std.ArrayList(u8) = .empty;
+    defer out_array.deinit(allocator);
+    const writer = out_array.writer(allocator);
     const XLine = XColorMarker.XtermLineWriter(@TypeOf(&writer));
     var marked = XColorMarker.init(allocator, x_string);
     defer marked.deinit();
@@ -1330,7 +1328,7 @@ test "XLine" {
     defer xprint.deinit();
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice();
+        const line = try out_array.toOwnedSlice(allocator);
         defer allocator.free(line);
         try oh.snap(
             @src(),
@@ -1344,7 +1342,7 @@ test "XLine" {
     xprint.newText(&empty_mark);
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice();
+        const line = try out_array.toOwnedSlice(allocator);
         defer allocator.free(line);
         try oh.snap(
             @src(),
@@ -1357,7 +1355,7 @@ test "XLine" {
     _ = try xprint.seek(6);
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice();
+        const line = try out_array.toOwnedSlice(allocator);
         defer allocator.free(line);
         try oh.snap(
             @src(),
@@ -1369,7 +1367,7 @@ test "XLine" {
     _ = try xprint.seek(25);
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice();
+        const line = try out_array.toOwnedSlice(allocator);
         defer allocator.free(line);
         try oh.snap(
             @src(),
@@ -1383,7 +1381,7 @@ test "XLine" {
         _ = try xprint.next();
         _ = try xprint.drop();
         _ = try xprint.next();
-        const line = try out_array.toOwnedSlice();
+        const line = try out_array.toOwnedSlice(allocator);
         defer allocator.free(line);
         try oh.snap(
             @src(),

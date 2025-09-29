@@ -3,23 +3,23 @@
 
     .fingerprint = 0x662d083b46632600,
 
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.1",
 
     // This is a [Semantic Version](https://semver.org/).
-    .version = "0.0.1",
+    .version = "0.1.2",
 
     .dependencies = .{
         .ohsnap = .{
-            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.4.0.tar.gz",
-            .hash = "ohsnap-0.3.1-iWxzyu6bAADX1OdmK7FFg94X6RDfDvbt0iwQFH8mSFJE",
+            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.4.1.tar.gz",
+            .hash = "ohsnap-0.4.1-iWxzyhicAAA90MEnwxA22VshYmsSH3t0dcqM9yib7ose",
         },
         .mvzr = .{
-            .url = "https://github.com/mnemnion/mvzr/archive/refs/tags/v0.2.1.tar.gz",
-            .hash = "1220fae4b97cd8ef806b454040ac772b32b5770cefdf16834961f238ed2e00bbe04c",
+            .url = "https://github.com/mnemnion/mvzr/archive/refs/tags/v0.3.7.tar.gz",
+            .hash = "mvzr-0.3.7-ZSOky5FtAQB2VrFQPNbXHQCFJxWTMAYEK7ljYEaMR6jt",
         },
         .ezcaper = .{
-            .url = "https://github.com/mnemnion/ezcaper/archive/refs/tags/v0.2.0.tar.gz",
-            .hash = "ezcaper-0.0.1-kd9_iT6TAADzqwCXzhZVnTDYs95bSQfGX6YDP6LyLF9W",
+            .url = "https://github.com/mnemnion/ezcaper/archive/refs/tags/v0.3.0.tar.gz",
+            .hash = "ezcaper-0.3.0-kd9_icCWAAAgzriNtlOgV8G5sBmD9nr8mnmo4zFNQQiq",
         },
     },
     .paths = .{

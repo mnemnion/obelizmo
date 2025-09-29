@@ -221,13 +221,13 @@ test "isEntity" {
 
 test "htmlEscapeEncoder" {
     const allocator = std.testing.allocator;
-    var out_array = std.ArrayList(u8).init(allocator);
-    defer out_array.deinit();
-    const writer = out_array.writer();
+    var out_array: std.ArrayList(u8) = .empty;
+    defer out_array.deinit(allocator);
+    const writer = out_array.writer(allocator);
     const encodeFn = htmlEscapeEncoder(@TypeOf(writer));
     const encodable = "A & B < C is&nbsp;> D";
     const out_amount = try encodeFn(writer, encodable);
-    const out_str = try out_array.toOwnedSlice();
+    const out_str = try out_array.toOwnedSlice(allocator);
     defer allocator.free(out_str);
     try std.testing.expectEqual(31, out_amount);
     try std.testing.expectEqualStrings("A &amp; B &lt; C is&nbsp;&gt; D", out_str);
@@ -235,18 +235,18 @@ test "htmlEscapeEncoder" {
 
 test "HtmlEncodedWriter" {
     const allocator = std.testing.allocator;
-    var out_array = std.ArrayList(u8).init(allocator);
-    defer out_array.deinit();
-    var array_writer = out_array.writer();
+    var out_array: std.ArrayList(u8) = .empty;
+    defer out_array.deinit(allocator);
+    var array_writer = out_array.writer(allocator);
     const EncodedWriteType = HtmlEncodedWriter(@TypeOf(array_writer));
     const encodable = "A & B < C is&nbsp;> D";
     var encoded_writer = EncodedWriteType.init(&array_writer);
     _ = try encoded_writer.writeEncode(encodable);
-    const out_encoded = try out_array.toOwnedSlice();
+    const out_encoded = try out_array.toOwnedSlice(allocator);
     defer allocator.free(out_encoded);
     try std.testing.expectEqualStrings("A &amp; B &lt; C is&nbsp;&gt; D", out_encoded);
     _ = try encoded_writer.write(encodable);
-    const out_literal = try out_array.toOwnedSlice();
+    const out_literal = try out_array.toOwnedSlice(allocator);
     defer allocator.free(out_literal);
     try std.testing.expectEqualStrings(encodable, out_literal);
 }
