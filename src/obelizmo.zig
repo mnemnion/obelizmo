@@ -9,6 +9,8 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const encoded_writer = @import("encoded_writer.zig");
 const xcolors = @import("colors");
 
+pub const colors = xcolors;
+
 pub const Color = xcolors.Color;
 pub const ErrorOf = xcolors.ErrorOf;
 
@@ -1197,7 +1199,7 @@ test "MarkedString writeAsStream writeAsTree" {
     var out_array: std.ArrayList(u8) = .empty;
     defer out_array.deinit(allocator);
     var stream_writer = out_array.writer(allocator);
-    var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(stream_writer)).init(&stream_writer);
+    var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(&stream_writer)).init(&stream_writer);
     _ = try color_marker.writeAsTree(&wrapped_stream, color_markup);
     const tree_string = try out_array.toOwnedSlice(allocator);
     defer allocator.free(tree_string);
@@ -1237,7 +1239,7 @@ test "MarkedString regex" {
         \\  "<r>func</r> <b>10</b> <r>f<y>u</y><r>nky</r> <b>456</b>"
         ,
     ).expectEqual(stream_string);
-    var wrapped_writer = encoded_writer.DefaultEncodedWriter(@TypeOf(writer)).init(&writer);
+    var wrapped_writer = encoded_writer.DefaultEncodedWriter(@TypeOf(&writer)).init(&writer);
     _ = try color_marker.writeAsTree(&wrapped_writer, color_markup);
     const tree_string = try out_array.toOwnedSlice(allocator);
     defer allocator.free(tree_string);

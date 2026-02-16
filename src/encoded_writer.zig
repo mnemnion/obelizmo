@@ -29,16 +29,16 @@ pub fn EncodedWriter(
     writeEncodeFn: *const fn (writer: WriterType, bytes: []const u8) ErrorOf(WriterType)!usize,
 ) type {
     return struct {
-        context: *WriterType,
+        context: WriterType,
         const EncodeWrite = @This();
         pub const Error = ErrorOf(WriterType);
 
-        pub fn init(context: *WriterType) EncodeWrite {
+        pub fn init(context: WriterType) EncodeWrite {
             return EncodeWrite{ .context = context };
         }
 
         pub fn writeEncode(e_write: EncodeWrite, bytes: []const u8) Error!usize {
-            return writeEncodeFn(e_write.context.*, bytes);
+            return writeEncodeFn(e_write.context, bytes);
         }
 
         pub fn write(e_write: EncodeWrite, bytes: []const u8) Error!usize {
@@ -238,7 +238,7 @@ test "HtmlEncodedWriter" {
     var out_array: std.ArrayList(u8) = .empty;
     defer out_array.deinit(allocator);
     var array_writer = out_array.writer(allocator);
-    const EncodedWriteType = HtmlEncodedWriter(@TypeOf(array_writer));
+    const EncodedWriteType = HtmlEncodedWriter(@TypeOf(&array_writer));
     const encodable = "A & B < C is&nbsp;> D";
     var encoded_writer = EncodedWriteType.init(&array_writer);
     _ = try encoded_writer.writeEncode(encodable);
