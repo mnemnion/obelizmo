@@ -27,6 +27,7 @@ pub fn MarkedString(Kind: type) type {
 
     return struct {
         string: []const u8,
+        allocator: Allocator,
         queue: MarkQueue,
 
         const SMark = @This();
@@ -69,7 +70,8 @@ pub fn MarkedString(Kind: type) type {
         pub fn init(allocator: Allocator, string: []const u8) SMark {
             return SMark{
                 .string = string,
-                .queue = MarkQueue.init(allocator, {}),
+                .allocator = allocator,
+                .queue = MarkQueue.initContext({}),
             };
         }
 
@@ -82,10 +84,11 @@ pub fn MarkedString(Kind: type) type {
             string: []const u8,
             cap: usize,
         ) error{OutOfMemory}!SMark {
-            var m_queue = MarkQueue.init(allocator, {});
-            try m_queue.ensureTotalCapacity(cap);
+            var m_queue = MarkQueue.initContext({});
+            try m_queue.ensureTotalCapacity(allocator, cap);
             return SMark{
                 .string = string,
+                .allocator = allocator,
                 .queue = m_queue,
             };
         }
@@ -95,7 +98,7 @@ pub fn MarkedString(Kind: type) type {
         /// deinitialized: this allows for, among other things, marks
         /// to be applied to an .rodata constant string.
         pub fn deinit(marker: *SMark) void {
-            marker.queue.deinit();
+            marker.queue.deinit(marker.allocator);
         }
 
         //| Marking
@@ -113,7 +116,7 @@ pub fn MarkedString(Kind: type) type {
                 .offset = @intCast(start),
                 .len = @intCast(end - start),
             };
-            try marker.queue.add(the_mark);
+            try marker.queue.push(marker.allocator, the_mark);
         }
 
         /// Mark the slice `string[start..end]` with the provided `mark`.
@@ -131,7 +134,7 @@ pub fn MarkedString(Kind: type) type {
                 .offset = @intCast(start),
                 .len = @intCast(end - start),
             };
-            try marker.queue.add(the_mark);
+            try marker.queue.push(marker.allocator, the_mark);
         }
 
         /// Mark `len` bytes of the string starting from `offset`.
@@ -148,7 +151,7 @@ pub fn MarkedString(Kind: type) type {
                 .offset = @intCast(offset),
                 .len = @intCast(len),
             };
-            try marker.queue.add(the_mark);
+            try marker.queue.push(marker.allocator, the_mark);
         }
 
         /// Mark `len` bytes of the string starting from `offset`.
@@ -166,7 +169,7 @@ pub fn MarkedString(Kind: type) type {
                 .offset = @intCast(offset),
                 .len = @intCast(len),
             };
-            try marker.queue.add(the_mark);
+            try marker.queue.push(marker.allocator, the_mark);
         }
 
         /// Find `needle` in string and mark with `mark`.  Returns the
@@ -273,7 +276,7 @@ pub fn MarkedString(Kind: type) type {
         pub fn removeMark(marker: *SMark, mark: Kind) ?Mark {
             for (marker.queue.items, 0..) |item, i| {
                 if (item.kind == mark) {
-                    return marker.queue.removeIndex(i);
+                    return marker.queue.popIndex(i);
                 }
             }
             return null;
@@ -281,11 +284,10 @@ pub fn MarkedString(Kind: type) type {
 
         //| Writing
 
-        fn cloneQueue(queue: MarkQueue) error{OutOfMemory}!MarkQueue {
-            const nu_q_slice = try queue.allocator.alloc(Mark, queue.items.len);
+        fn cloneQueue(allocator: Allocator, queue: MarkQueue) error{OutOfMemory}!MarkQueue {
+            const nu_q_slice = try allocator.alloc(Mark, queue.items.len);
             @memcpy(nu_q_slice, queue.items);
             return MarkQueue{
-                .allocator = queue.allocator,
                 .items = nu_q_slice,
                 .cap = nu_q_slice.len,
                 .context = {},
@@ -363,14 +365,13 @@ pub fn MarkedString(Kind: type) type {
                     markups: MarkupColorArray,
                     writer: Writer,
                 ) XLine {
-                    const alloc = marker.queue.allocator;
                     return XLine{
                         .writer = writer,
                         .marker = marker,
                         .markups = markups,
                         // This a useful placeholder, we clone from the .initial state.
                         .in_q = marker.queue,
-                        .out_q = OutQueue.init(alloc, {}),
+                        .out_q = OutQueue.initContext({}),
                         .fgs = .empty,
                         .bgs = .empty,
                         .uls = .empty,
@@ -387,13 +388,12 @@ pub fn MarkedString(Kind: type) type {
                     markups: MarkupColorArray,
                     writer: Writer,
                 ) XLine {
-                    const alloc = marker.queue.allocator;
                     return XLine{
                         .writer = writer,
                         .marker = marker,
                         .markups = markups,
                         .in_q = marker.queue,
-                        .out_q = OutQueue.init(alloc, {}),
+                        .out_q = OutQueue.initContext({}),
                         .fgs = .empty,
                         .bgs = .empty,
                         .uls = .empty,
@@ -404,13 +404,13 @@ pub fn MarkedString(Kind: type) type {
                 /// Free memory owned by the XTermLineWriter.  This does not
                 /// include the MarkedString or MarkupColorArray.
                 pub fn deinit(xprint: *XLine) void {
-                    const alloc = xprint.marker.queue.allocator;
+                    const alloc = xprint.marker.allocator;
                     if (xprint.state != .initial and
                         !sameQueue(xprint.marker.queue, xprint.in_q))
                     {
-                        xprint.in_q.deinit();
+                        xprint.in_q.deinit(alloc);
                     }
-                    xprint.out_q.deinit();
+                    xprint.out_q.deinit(alloc);
                     xprint.fgs.deinit(alloc);
                     xprint.bgs.deinit(alloc);
                     xprint.uls.deinit(alloc);
@@ -441,7 +441,7 @@ pub fn MarkedString(Kind: type) type {
                     if (xprint.state != .initial and
                         !sameQueue(xprint.marker.queue, xprint.in_q))
                     {
-                        xprint.in_q.deinit();
+                        xprint.in_q.deinit(xprint.allocator());
                     }
                     xprint.out_q.items.len = 0;
                     xprint.fgs.clearRetainingCapacity();
@@ -528,8 +528,8 @@ pub fn MarkedString(Kind: type) type {
                         else => {},
                     }
                     if (index == xprint.marker.string.len) {
-                        xprint.in_q.shrinkAndFree(0);
-                        xprint.out_q.shrinkAndFree(0);
+                        xprint.in_q.shrinkAndFree(xprint.allocator(), 0);
+                        xprint.out_q.shrinkAndFree(xprint.allocator(), 0);
                         xprint.state = .final;
                         xprint.cursor = index;
                         return false;
@@ -550,7 +550,7 @@ pub fn MarkedString(Kind: type) type {
                                 .background => removeMarkFrom(&xprint.bgs, out_mark),
                                 .underline => removeMarkFrom(&xprint.uls, out_mark),
                             }
-                            _ = xprint.out_q.remove();
+                            _ = xprint.out_q.pop();
                             seek_out = xprint.out_q.peek();
                         } else break;
                     }
@@ -562,7 +562,7 @@ pub fn MarkedString(Kind: type) type {
                     var effect_stack: ArrayListUnmanaged(Mark) = .empty;
                     defer effect_stack.deinit(xprint.allocator());
                     // Start with this_mark, if present
-                    var maybe_mark = xprint.this_mark orelse xprint.in_q.removeOrNull();
+                    var maybe_mark = xprint.this_mark orelse xprint.in_q.pop();
                     while (maybe_mark) |a_mark| {
                         if (a_mark.offset >= index) {
                             // We have our mark.
@@ -570,7 +570,7 @@ pub fn MarkedString(Kind: type) type {
                             xprint.state = .resume_print;
                             xprint.cursor = index;
                             for (effect_stack.items) |style_mark| {
-                                try xprint.in_q.add(style_mark);
+                                try xprint.in_q.push(xprint.allocator(), style_mark);
                             }
                             return true;
                         }
@@ -591,17 +591,17 @@ pub fn MarkedString(Kind: type) type {
                                     try xprint.uls.append(xprint.allocator(), a_mark);
                                 },
                             }
-                            try xprint.out_q.add(a_mark);
-                            maybe_mark = xprint.in_q.removeOrNull();
+                            try xprint.out_q.push(xprint.allocator(), a_mark);
+                            maybe_mark = xprint.in_q.pop();
                         } else {
                             // We've completely passed this mark.
-                            maybe_mark = xprint.in_q.removeOrNull();
+                            maybe_mark = xprint.in_q.pop();
                         }
                     }
                     // Getting here means we've emptied in_q, except maybe the style stack.
                     assert(xprint.in_q.items.len == 0);
                     for (effect_stack.items) |style_mark| {
-                        try xprint.in_q.add(style_mark);
+                        try xprint.in_q.push(xprint.allocator(), style_mark);
                     }
                     xprint.state = .resume_print;
                     xprint.cursor = index;
@@ -653,10 +653,10 @@ pub fn MarkedString(Kind: type) type {
                 fn setup(xprint: *XLine, clone: bool) error{OutOfMemory}!bool {
                     // Clone queue.
                     if (clone) {
-                        xprint.in_q = try cloneQueue(xprint.marker.queue);
+                        xprint.in_q = try cloneQueue(xprint.marker.allocator, xprint.marker.queue);
                     }
                     // load this_mark, if any
-                    const maybe_mark = xprint.in_q.removeOrNull();
+                    const maybe_mark = xprint.in_q.pop();
                     if (maybe_mark) |mark| {
                         xprint.this_mark = mark;
                         xprint.state = .write_to_this;
@@ -678,7 +678,7 @@ pub fn MarkedString(Kind: type) type {
                         const back_color = xprint.markups.get(back_mark.kind);
                         assert(back_color.style() == .effect);
                         try back_color.printOn(xprint.writer);
-                        _ = xprint.in_q.remove();
+                        _ = xprint.in_q.pop();
                         maybe_back = xprint.in_q.peek();
                     }
                     // Anything on the stacks?
@@ -752,12 +752,12 @@ pub fn MarkedString(Kind: type) type {
                         },
                     }
                     // Append to out queue
-                    try xprint.out_q.add(mark);
+                    try xprint.out_q.push(xprint.allocator(), mark);
                     // Safety: we just added to the queue, so this
                     // always succeeds:
                     const next_mark = xprint.out_q.peek().?;
                     // Pull next mark
-                    xprint.this_mark = xprint.in_q.removeOrNull();
+                    xprint.this_mark = xprint.in_q.pop();
                     if (xprint.this_mark) |this| {
                         if (this.offset <= next_mark.final()) {
                             xprint.state = .write_to_this;
@@ -791,7 +791,7 @@ pub fn MarkedString(Kind: type) type {
                 // with the off-button on the next_mark Color.  Hence the common
                 // printOff isn't lifted out of the switch.
                 fn printNextMark(xprint: *XLine) Error!bool {
-                    const next_mark = xprint.out_q.remove();
+                    const next_mark = xprint.out_q.pop().?;
                     // Add assertion that cursor is correct (complex due to newlines)
                     const next_color = xprint.markups.get(next_mark.kind);
                     switch (next_color.style()) {
@@ -922,7 +922,7 @@ pub fn MarkedString(Kind: type) type {
                 }
 
                 inline fn allocator(xprint: XLine) Allocator {
-                    return xprint.marker.queue.allocator;
+                    return xprint.marker.allocator;
                 }
             };
         }
@@ -939,7 +939,7 @@ pub fn MarkedString(Kind: type) type {
             marker: *const SMark,
             writer: anytype,
             markups: MarkupStringArray,
-        ) ErrorOf(@TypeOf(writer))!usize {
+        ) (ErrorOf(@TypeOf(writer)) || error{OutOfMemory})!usize {
             // See if there's a writeEncode function.
             const writeBody = encode: {
                 const Writer = @TypeOf(writer);
@@ -964,15 +964,15 @@ pub fn MarkedString(Kind: type) type {
             };
             // We use a second queue with a different comparison function, such
             // that the front of the queue is always the next-outermost Mark.
-            const allocator = marker.queue.allocator;
+            const allocator = marker.allocator;
             const string = marker.string;
-            var in_q = try cloneQueue(marker.queue);
-            defer in_q.deinit();
-            var out_q = OutQueue.init(allocator, {});
-            defer out_q.deinit();
+            var in_q = try cloneQueue(allocator, marker.queue);
+            defer in_q.deinit(allocator);
+            var out_q = OutQueue.initContext({});
+            defer out_q.deinit(allocator);
             // Some rounds of the while loop will skip a mark, so we pop the queue
             // manually:
-            var this_mark = in_q.removeOrNull();
+            var this_mark = in_q.pop();
             var cursor: usize = 0;
             var count: usize = 0;
             marking: while (this_mark) |mark| {
@@ -1001,13 +1001,13 @@ pub fn MarkedString(Kind: type) type {
                     const left = markups.get(mark.kind)[LEFT];
                     count += try writer.write(left);
                     // Enplace on the out queue.
-                    try out_q.add(mark);
+                    try out_q.push(allocator, mark);
                     // Replace mark.
-                    this_mark = in_q.removeOrNull();
+                    this_mark = in_q.pop();
                     continue :marking;
                 } else {
                     // This mark isn't up yet, write the end off the queue.
-                    const end_mark = out_q.remove();
+                    const end_mark = out_q.pop().?;
                     const right = markups.get(end_mark.kind)[RIGHT];
                     count += try writer.write(right);
                     // Now stream the left mark from the next on-queue, if any.
@@ -1015,7 +1015,7 @@ pub fn MarkedString(Kind: type) type {
                 }
             } // end :marking
             // There may still be marks on the out queue to drain
-            while (out_q.removeOrNull()) |out_mark| {
+            while (out_q.pop()) |out_mark| {
                 const slice_end = out_mark.final();
                 count += try writeBody(writer.*, string[cursor..slice_end]);
                 cursor = slice_end;
@@ -1091,7 +1091,7 @@ const OhSnap = @import("ohsnap");
 
 test "MarkedString" {
     const allocator = std.testing.allocator;
-    const oh = OhSnap{};
+    const oh = OhSnap.OhSnap(OhSnap.default_pretty_options);
     const e_num = enum {
         la,
         dee,
@@ -1153,7 +1153,7 @@ const color_markup = ColorArray.init(
 );
 
 test "MarkedString writeAsStream writeAsTree" {
-    const oh = OhSnap{};
+    const oh = OhSnap.OhSnap(OhSnap.default_pretty_options);
     const allocator = testing.allocator;
     var color_marker = try ColorMarker.initCapacity(allocator, "red blue green yellow", 4);
     defer color_marker.deinit();
@@ -1196,12 +1196,11 @@ test "MarkedString writeAsStream writeAsTree" {
         color_marker.queue.items[1].final(),
         color_marker.queue.items[2].final(),
     );
-    var out_array: std.ArrayList(u8) = .empty;
-    defer out_array.deinit(allocator);
-    var stream_writer = out_array.writer(allocator);
-    var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(&stream_writer)).init(&stream_writer);
+    var stream_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer stream_writer.deinit();
+    var wrapped_stream = encoded_writer.DefaultEncodedWriter(@TypeOf(&stream_writer.writer)).init(&stream_writer.writer);
     _ = try color_marker.writeAsTree(&wrapped_stream, color_markup);
-    const tree_string = try out_array.toOwnedSlice(allocator);
+    const tree_string = try allocator.dupe(u8, stream_writer.writer.buffered());
     defer allocator.free(tree_string);
     try oh.snap(
         @src(),
@@ -1216,7 +1215,7 @@ const Regex = @import("mvzr").Regex;
 test "MarkedString regex" {
     if (true)
         return error.SkipZigTest;
-    const oh = OhSnap{};
+    const oh = OhSnap.OhSnap(OhSnap.default_pretty_options);
     const allocator = testing.allocator;
     var color_marker = try ColorMarker.initCapacity(allocator, "func 10 funky 456", 4);
     defer color_marker.deinit();
@@ -1227,11 +1226,10 @@ test "MarkedString regex" {
     try expect(try color_marker.matchAndMarkAll(.red, alpha_regex));
     const u_regex = Regex.compile("u").?;
     try expectEqual(9, try color_marker.matchAndMarkPos(.yellow, 5, u_regex));
-    var out_array: std.ArrayList(u8) = .empty;
-    defer out_array.deinit(allocator);
-    var writer = out_array.writer(allocator);
-    _ = try color_marker.writeAsStream(&writer, color_markup);
-    const stream_string = try out_array.toOwnedSlice(allocator);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    _ = try color_marker.writeAsStream(&writer.writer, color_markup);
+    const stream_string = try allocator.dupe(u8, writer.writer.buffered());
     defer allocator.free(stream_string);
     try oh.snap(
         @src(),
@@ -1239,9 +1237,10 @@ test "MarkedString regex" {
         \\  "<r>func</r> <b>10</b> <r>f<y>u</y><r>nky</r> <b>456</b>"
         ,
     ).expectEqual(stream_string);
-    var wrapped_writer = encoded_writer.DefaultEncodedWriter(@TypeOf(&writer)).init(&writer);
+    writer.writer.end = 0;
+    var wrapped_writer = encoded_writer.DefaultEncodedWriter(@TypeOf(&writer.writer)).init(&writer.writer);
     _ = try color_marker.writeAsTree(&wrapped_writer, color_markup);
-    const tree_string = try out_array.toOwnedSlice(allocator);
+    const tree_string = try allocator.dupe(u8, writer.writer.buffered());
     defer allocator.free(tree_string);
     try oh.snap(
         @src(),
@@ -1306,14 +1305,13 @@ const reg_bar = Regex.compile("\\|\\|\\|.*?\\|\\|\\|").?;
 
 test "XLine" {
     const allocator = std.testing.allocator;
-    const oh: OhSnap = .{};
-    var out_array: std.ArrayList(u8) = .empty;
-    defer out_array.deinit(allocator);
-    const writer = out_array.writer(allocator);
-    const XLine = XColorMarker.XtermLineWriter(@TypeOf(&writer));
+    const oh = OhSnap.OhSnap(OhSnap.default_pretty_options);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    const XLine = XColorMarker.XtermLineWriter(@TypeOf(&writer.writer));
     var marked = XColorMarker.init(allocator, x_string);
     defer marked.deinit();
-    var xprint = XLine.init(&marked, x_markups, &writer);
+    var xprint = XLine.init(&marked, x_markups, &writer.writer);
     _ = try marked.matchAndMark(.red_italic_bold, reg_a);
     _ = try marked.matchAndMark(.green_underline, reg_1);
     // _ = try marked.findAndMark(.purple_curly_underline, "333");
@@ -1330,13 +1328,14 @@ test "XLine" {
     defer xprint.deinit();
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice(allocator);
+        const line = try allocator.dupe(u8, writer.writer.buffered());
         defer allocator.free(line);
         try oh.snap(
             @src(),
             \\"\x1b[1m\x1b[3m\x1b[38:2:255:0:0maaa\x1b[4m\x1b[58:5:2m111\x1b[23m\x1b[32m333\x1b[39m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m111\x1b[59m\x1b[24maaa\x1b[22m\x1b[23m\x1b[39m\x1b[48:2:247:228:169m\x1b[30m(\x1b[34mfoo bar baz\x1b[39m\x1b[30mbux)\x1b[39m\x1b[49m \x1b[32mq\x1b[7muu\x1b[27mx\x1b[39m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
             ,
         ).expectEqualFmt(esc_string(line));
+        writer.writer.end = 0;
     }
     // Prints unmarked string properly.
     var empty_mark = XColorMarker.init(allocator, x_string);
@@ -1344,38 +1343,41 @@ test "XLine" {
     xprint.newText(&empty_mark);
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice(allocator);
+        const line = try allocator.dupe(u8, writer.writer.buffered());
         defer allocator.free(line);
         try oh.snap(
             @src(),
             \\"aaa111333111aaa(foo bar bazbux) quux---|||!!!|||---"
             ,
         ).expectEqualFmt(esc_string(line));
+        writer.writer.end = 0;
     }
     // Seek tests
     xprint.newText(&marked);
     _ = try xprint.seek(6);
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice(allocator);
+        const line = try allocator.dupe(u8, writer.writer.buffered());
         defer allocator.free(line);
         try oh.snap(
             @src(),
             \\"\x1b[0m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m\x1b[4m\x1b[58:5:2m\x1b[23m\x1b[32m333\x1b[39m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m111\x1b[59m\x1b[24maaa\x1b[22m\x1b[23m\x1b[39m\x1b[48:2:247:228:169m\x1b[30m(\x1b[34mfoo bar baz\x1b[39m\x1b[30mbux)\x1b[39m\x1b[49m \x1b[32mq\x1b[7muu\x1b[27mx\x1b[39m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
             ,
         ).expectEqualFmt(esc_string(line));
+        writer.writer.end = 0;
     }
     xprint.newText(&marked);
     _ = try xprint.seek(25);
     {
         while (try xprint.next()) |_| {}
-        const line = try out_array.toOwnedSlice(allocator);
+        const line = try allocator.dupe(u8, writer.writer.buffered());
         defer allocator.free(line);
         try oh.snap(
             @src(),
             \\"\x1b[0m\x1b[30m\x1b[34m\x1b[48:2:247:228:169mbaz\x1b[39m\x1b[30mbux)\x1b[39m\x1b[49m \x1b[32mq\x1b[7muu\x1b[27mx\x1b[39m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
             ,
         ).expectEqualFmt(esc_string(line));
+        writer.writer.end = 0;
     }
     // Drop test
     xprint.newText(&marked);
@@ -1383,13 +1385,14 @@ test "XLine" {
         _ = try xprint.next();
         _ = try xprint.drop();
         _ = try xprint.next();
-        const line = try out_array.toOwnedSlice(allocator);
+        const line = try allocator.dupe(u8, writer.writer.buffered());
         defer allocator.free(line);
         try oh.snap(
             @src(),
             \\"\x1b[1m\x1b[3m\x1b[38:2:255:0:0maaa\x1b[4m\x1b[58:5:2m111\x1b[23m\x1b[32m333\x1b[39m\x1b[1m\x1b[3m\x1b[38:2:255:0:0m111\x1b[59m\x1b[24maaa\x1b[22m\x1b[23m\x1b[39m\x1b[0m\x1b[4:5m\x1b[58:5:214m---\x1b[48:5:145m|||\x1b[73m\x1b[35m!!!\x1b[75m\x1b[39m|||\x1b[49m---\x1b[59m\x1b[24m"
             ,
         ).expectEqualFmt(esc_string(line));
+        writer.writer.end = 0;
     }
     // Safe to drop too many lines
     xprint.newText(&marked);

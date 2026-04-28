@@ -3,19 +3,19 @@
 
     .fingerprint = 0x662d083b46632600,
 
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
 
     // This is a [Semantic Version](https://semver.org/).
     .version = "0.1.2",
 
     .dependencies = .{
         .ohsnap = .{
-            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.4.3.tar.gz",
-            .hash = "ohsnap-0.4.2-iWxzyg2fAADV1p8ahYk7KG6J9xy4Rl6ld53r9g0HV74K",
+            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.5.0.tar.gz",
+            .hash = "ohsnap-0.5.0-iWxzymOpAABdbfwHCH-ZMY_KPRyQNi2X9MiJHr6OpFJp",
         },
         .mvzr = .{
-            .url = "https://github.com/mnemnion/mvzr/archive/refs/tags/v0.3.7.tar.gz",
-            .hash = "mvzr-0.3.7-ZSOky5FtAQB2VrFQPNbXHQCFJxWTMAYEK7ljYEaMR6jt",
+            .url = "https://github.com/mnemnion/mvzr/archive/refs/tags/v0.3.9.tar.gz",
+            .hash = "mvzr-0.3.9-ZSOky_lvAQDe3gx6pFgM_NG-jl9NO_83u5OI1MF8-2PC",
         },
         .ezcaper = .{
             .url = "https://github.com/mnemnion/ezcaper/archive/refs/tags/v0.3.0.tar.gz",

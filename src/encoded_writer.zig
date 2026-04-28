@@ -221,13 +221,12 @@ test "isEntity" {
 
 test "htmlEscapeEncoder" {
     const allocator = std.testing.allocator;
-    var out_array: std.ArrayList(u8) = .empty;
-    defer out_array.deinit(allocator);
-    const writer = out_array.writer(allocator);
-    const encodeFn = htmlEscapeEncoder(@TypeOf(writer));
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    const encodeFn = htmlEscapeEncoder(@TypeOf(&aw.writer));
     const encodable = "A & B < C is&nbsp;> D";
-    const out_amount = try encodeFn(writer, encodable);
-    const out_str = try out_array.toOwnedSlice(allocator);
+    const out_amount = try encodeFn(&aw.writer, encodable);
+    const out_str = try allocator.dupe(u8, aw.writer.buffered());
     defer allocator.free(out_str);
     try std.testing.expectEqual(31, out_amount);
     try std.testing.expectEqualStrings("A &amp; B &lt; C is&nbsp;&gt; D", out_str);
@@ -235,18 +234,18 @@ test "htmlEscapeEncoder" {
 
 test "HtmlEncodedWriter" {
     const allocator = std.testing.allocator;
-    var out_array: std.ArrayList(u8) = .empty;
-    defer out_array.deinit(allocator);
-    var array_writer = out_array.writer(allocator);
-    const EncodedWriteType = HtmlEncodedWriter(@TypeOf(&array_writer));
+    var array_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer array_writer.deinit();
+    const EncodedWriteType = HtmlEncodedWriter(@TypeOf(&array_writer.writer));
     const encodable = "A & B < C is&nbsp;> D";
-    var encoded_writer = EncodedWriteType.init(&array_writer);
+    var encoded_writer = EncodedWriteType.init(&array_writer.writer);
     _ = try encoded_writer.writeEncode(encodable);
-    const out_encoded = try out_array.toOwnedSlice(allocator);
+    const out_encoded = try allocator.dupe(u8, array_writer.writer.buffered());
     defer allocator.free(out_encoded);
     try std.testing.expectEqualStrings("A &amp; B &lt; C is&nbsp;&gt; D", out_encoded);
+    array_writer.writer.end = 0;
     _ = try encoded_writer.write(encodable);
-    const out_literal = try out_array.toOwnedSlice(allocator);
+    const out_literal = try allocator.dupe(u8, array_writer.writer.buffered());
     defer allocator.free(out_literal);
     try std.testing.expectEqualStrings(encodable, out_literal);
 }
