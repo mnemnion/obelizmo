@@ -6,7 +6,7 @@
     .minimum_zig_version = "0.16.0",
 
     // This is a [Semantic Version](https://semver.org/).
-    .version = "0.2.1",
+    .version = "0.2.2",
 
     .dependencies = .{
         .ohsnap = .{
@@ -18,8 +18,8 @@
             .hash = "mvzr-0.3.9-ZSOky_lvAQDe3gx6pFgM_NG-jl9NO_83u5OI1MF8-2PC",
         },
         .ezcaper = .{
-            .url = "https://github.com/mnemnion/ezcaper/archive/refs/tags/v0.3.0.tar.gz",
-            .hash = "ezcaper-0.3.0-kd9_icCWAAAgzriNtlOgV8G5sBmD9nr8mnmo4zFNQQiq",
+            .url = "https://github.com/mnemnion/ezcaper/archive/refs/tags/v0.3.2.tar.gz",
+            .hash = "ezcaper-0.3.2-kd9_if6WAAA00sjsfMhmvXkf1q0ouGwVyhftEOW0MdpM",
         },
     },
     .paths = .{

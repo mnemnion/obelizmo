@@ -13,7 +13,7 @@ This library is entirely usable at present for its main focus, which is terminal
 Using the Zig build system:
 
 ```sh
-zig fetch --save https://www.github.com/mnemnion/obelizmo/archive/refs/tags/v0.2.1.tar.gz
+zig fetch --save https://www.github.com/mnemnion/obelizmo/archive/refs/tags/v0.2.2.tar.gz
 ```
 
 The package offers two modules, `obezlimo` itself and [colors](#the-colors-module).  Obelizmo works in two stages: marking strings, and printing them.
