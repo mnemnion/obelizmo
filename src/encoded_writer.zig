@@ -37,6 +37,7 @@ pub fn EncodedWriter(
             return EncodeWrite{ .context = context };
         }
 
+        /// Encode the entire slice or return an error; report encoded output bytes.
         pub fn writeEncode(e_write: EncodeWrite, bytes: []const u8) Error!usize {
             return writeEncodeFn(e_write.context, bytes);
         }
@@ -66,7 +67,7 @@ pub fn HtmlEncodedWriter(WriterType: type) type {
 pub fn DefaultEncodedWriter(WriterType: type) type {
     const defaultEncodeFn = struct {
         fn writeEncode(writer: WriterType, bytes: []const u8) ErrorOf(WriterType)!usize {
-            return try writer.write(bytes);
+            return writeAllCount(writer, bytes);
         }
     }.writeEncode;
     return EncodedWriter(WriterType, defaultEncodeFn);
@@ -99,28 +100,27 @@ pub fn XtermEncodedWriter(WriterType: type) type {
                     0x0b...0x0c, // '\r'
                     0x0e...0x1f,
                     => {
-                        count += try writer.write(bytes[cursor..idx]);
+                        count += try writeAllCount(writer, bytes[cursor..idx]);
                         try writer.print("{u}", .{control_pic[b]});
-                        count += 1;
+                        count += 3;
                         cursor = idx + 1;
                     },
                     0x7f => {
-                        count += try writer.write(bytes[cursor..idx]);
+                        count += try writeAllCount(writer, bytes[cursor..idx]);
                         try writer.writeAll("␈");
-                        count += 1;
+                        count += 3;
                         cursor = idx + 1;
                     },
                     0xc2 => {
                         if (idx + 1 < bytes.len) {
                             const b1 = bytes[idx + 1];
                             if (0x80 <= b1 and b1 <= 0x9f) {
-                                count += try writer.write(bytes[cursor..idx]);
+                                count += try writeAllCount(writer, bytes[cursor..idx]);
                                 idx += 1;
                                 // Convenient property: Codepoint value of C1s is just
                                 // the second byte. Written in 'vi format' as e.g <80>
                                 try writer.print("<{x:0>2}>", .{b1});
-                                // \u{80} == 6 bytes
-                                count += 6;
+                                count += 4;
                                 cursor = idx + 1;
                             }
                         }
@@ -128,7 +128,7 @@ pub fn XtermEncodedWriter(WriterType: type) type {
                     else => {},
                 }
             }
-            count += try writer.write(bytes[cursor..idx]);
+            count += try writeAllCount(writer, bytes[cursor..idx]);
             return count;
         }
     }.writeEncode;
@@ -148,13 +148,13 @@ pub fn htmlEscapeEncoder(
             for (bytes, 0..) |byte, i| {
                 count += count: {
                     switch (byte) {
-                        '<' => break :count try writer.write("&lt;"),
-                        '>' => break :count try writer.write("&gt;"),
+                        '<' => break :count try writeAllCount(writer, "&lt;"),
+                        '>' => break :count try writeAllCount(writer, "&gt;"),
                         '&' => {
                             if (isEntity(bytes[i..])) {
-                                break :count try writer.write("&");
+                                break :count try writeAllCount(writer, "&");
                             } else {
-                                break :count try writer.write("&amp;");
+                                break :count try writeAllCount(writer, "&amp;");
                             }
                         },
                         else => |b| {
@@ -167,6 +167,11 @@ pub fn htmlEscapeEncoder(
             return count;
         }
     }.writeEncodeFn;
+}
+
+fn writeAllCount(writer: anytype, bytes: []const u8) ErrorOf(@TypeOf(writer))!usize {
+    try writer.writeAll(bytes);
+    return bytes.len;
 }
 
 fn isEntity(slice: []const u8) bool {
@@ -249,3 +254,69 @@ test "HtmlEncodedWriter" {
     defer allocator.free(out_literal);
     try std.testing.expectEqualStrings(encodable, out_literal);
 }
+
+test "encoded writes retain every byte across short writes and buffer flushes" {
+    inline for (.{ DefaultEncodedWriter, XtermEncodedWriter, HtmlEncodedWriter }) |Encoder| {
+        const source = "prefix<&\x1b\x7f\xc2\x80>suffix\n";
+        const expected = if (Encoder == DefaultEncodedWriter)
+            source
+        else if (Encoder == XtermEncodedWriter)
+            "prefix<&␛␈<80>>suffix\n"
+        else
+            "prefix&lt;&amp;\x1b\x7f\xc2\x80&gt;suffix\n";
+        for ([_]usize{ 0, 1, 8 }) |capacity| {
+            for ([_]usize{ 1, 3 }) |chunk| {
+                var buffer: [8]u8 = undefined;
+                var sink: ShortWriter = .{ .chunk = chunk };
+                sink.writer.buffer = buffer[0..capacity];
+                try sink.writer.writeAll("already buffered: ");
+                const encoded = Encoder(*std.Io.Writer).init(&sink.writer);
+                const count = try encoded.writeEncode(source);
+                try sink.writer.flush();
+                try std.testing.expectEqualStrings("already buffered: " ++ expected, sink.bytes[0..sink.len]);
+                try std.testing.expectEqual(expected.len, count);
+            }
+        }
+    }
+}
+
+test "encoded writes propagate failure after a partial write" {
+    inline for (.{ DefaultEncodedWriter, XtermEncodedWriter, HtmlEncodedWriter }) |Encoder| {
+        var sink: ShortWriter = .{ .limit = 5 };
+        const encoded = Encoder(*std.Io.Writer).init(&sink.writer);
+        try std.testing.expectError(error.WriteFailed, encoded.writeEncode("prefix<tail"));
+        try std.testing.expectEqualStrings("prefi", sink.bytes[0..sink.len]);
+    }
+}
+
+const ShortWriter = struct {
+    writer: std.Io.Writer = .{ .buffer = &.{}, .vtable = &.{ .drain = drain } },
+    bytes: [256]u8 = undefined,
+    len: usize = 0,
+    chunk: usize = 3,
+    limit: usize = 256,
+    pause: bool = true,
+
+    fn drain(writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const sink: *ShortWriter = @alignCast(@fieldParentPtr("writer", writer));
+        sink.pause = !sink.pause;
+        if (!sink.pause) return 0;
+        if (writer.end != 0) {
+            const count = try sink.append(writer.buffered());
+            return writer.consume(count);
+        }
+        for (data, 0..) |part, i| {
+            if (i == data.len - 1 and splat == 0) break;
+            if (part.len != 0) return sink.append(part);
+        }
+        return 0;
+    }
+
+    fn append(sink: *ShortWriter, bytes: []const u8) std.Io.Writer.Error!usize {
+        if (sink.len == sink.limit) return error.WriteFailed;
+        const count = @min(bytes.len, sink.chunk, sink.limit - sink.len);
+        @memcpy(sink.bytes[sink.len..][0..count], bytes[0..count]);
+        sink.len += count;
+        return count;
+    }
+};

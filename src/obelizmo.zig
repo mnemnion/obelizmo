@@ -1399,3 +1399,7 @@ test "XLine" {
     _ = try xprint.dropN(15);
     try expectEqual(null, xprint.next());
 }
+
+comptime {
+    std.testing.refAllDecls(encoded_writer);
+}
