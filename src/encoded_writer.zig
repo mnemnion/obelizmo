@@ -74,7 +74,7 @@ pub fn DefaultEncodedWriter(WriterType: type) type {
 }
 
 const control_pic = fill: {
-    var control_pic_fill: [32]u21 = .{0} ** 32;
+    var control_pic_fill: [32]u21 = @splat(0);
     for (0x2400..0x241f, 0..) |c, i| {
         if (i == 8) {
             // We call 0x08 "delete" now, historically "backspace", now 0x7f

@@ -2,7 +2,6 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-
     const optimize = b.standardOptimizeOption(.{});
 
     // Export as module to be available for @import("obelizmo") on user site
@@ -18,47 +17,21 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
     obelizmo_module.addImport("colors", colors_module);
+    obelizmo_module.addImport("mvzr", b.dependency("mvzr", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("mvzr"));
 
     const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
-
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_module = obelizmo_module,
-        .filters = test_filters,
-    });
-
-    lib_unit_tests.root_module.addImport("colors", colors_module);
-
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
-    if (b.lazyDependency("ohsnap", .{
-        .target = target,
-        .optimize = optimize,
-    })) |ohsnap_dep| {
-        lib_unit_tests.root_module.addImport("ohsnap", ohsnap_dep.module("ohsnap"));
-    }
-
-    if (b.lazyDependency("ezcaper", .{
-        .target = target,
-        .optimize = optimize,
-    })) |ezcaper_dep| {
-        lib_unit_tests.root_module.addImport("ezcaper", ezcaper_dep.module("ezcaper"));
-    }
-
-    if (b.lazyDependency("mvzr", .{
-        .target = target,
-        .optimize = optimize,
-    })) |mvzr_dep| {
-        lib_unit_tests.root_module.addImport("mvzr", mvzr_dep.module("mvzr"));
-        obelizmo_module.addImport("mvzr", mvzr_dep.module("mvzr"));
-    }
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
+    const run_tests = std.Build.Step.Run.create(b, "snapshot tests");
+    run_tests.addFileArg2(.zig_exe, .{});
+    run_tests.addArgs(&.{ "build", "test" });
+    run_tests.setCwd(b.path("tests"));
+    run_tests.addArg(b.fmt("-Doptimize={s}", .{@tagName(optimize)}));
+    run_tests.addArg(b.fmt("-Dtarget={s}", .{target.query.zigTriple(b.allocator) catch @panic("OOM")}));
+    run_tests.addArg(b.fmt("-Dcpu={s}", .{target.query.serializeCpuAlloc(b.allocator) catch @panic("OOM")}));
+    for (test_filters) |filter| run_tests.addArg(b.fmt("-Dtest-filter={s}", .{filter}));
+    run_tests.has_side_effects = true;
+    b.step("test", "Run unit and snapshot tests").dependOn(&run_tests.step);
 }

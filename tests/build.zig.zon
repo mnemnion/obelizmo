@@ -1,0 +1,19 @@
+.{
+    .name = .obelizmo_tests,
+    .fingerprint = 0xd8976c1c6ba2edc9,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .obelizmo = .{ .path = "../../obelizmo" },
+
+        .ohsnap = .{
+            .url = "https://github.com/mnemnion/ohsnap/archive/refs/tags/v0.5.3.tar.gz",
+            .hash = "ohsnap-0.5.3-iWxzyg-oAAB-Ul98rpPO2zDmFUlS4cT29lCBPLcWWy4T",
+        },
+        .ezcaper = .{
+            .url = "https://github.com/mnemnion/ezcaper/archive/refs/tags/v0.3.3.tar.gz",
+            .hash = "ezcaper-0.3.3-kd9_iVOXAACeb32PbDTf0DBbYCfrI9qXbwW5ayQzbpTM",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon" },
+}

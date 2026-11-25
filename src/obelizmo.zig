@@ -1042,9 +1042,9 @@ pub fn MarkedString(Kind: type) type {
                 return Order.gt;
             } else if (left.len > right.len) {
                 return Order.lt;
-            } else if (@intFromEnum(left.kind) < @intFromEnum(right.kind)) {
+            } else if (@backingInt(left.kind) < @backingInt(right.kind)) {
                 return Order.lt;
-            } else if (@intFromEnum(left.kind) > @intFromEnum(right.kind)) {
+            } else if (@backingInt(left.kind) > @backingInt(right.kind)) {
                 return Order.gt;
             } else {
                 return Order.eq;
@@ -1068,9 +1068,9 @@ pub fn MarkedString(Kind: type) type {
                 return Order.lt;
             } else if (left.len > right.len) {
                 return Order.gt;
-            } else if (@intFromEnum(left.kind) < @intFromEnum(right.kind)) {
+            } else if (@backingInt(left.kind) < @backingInt(right.kind)) {
                 return Order.gt;
-            } else if (@intFromEnum(left.kind) > @intFromEnum(right.kind)) {
+            } else if (@backingInt(left.kind) > @backingInt(right.kind)) {
                 return Order.lt;
             } else return Order.eq;
         }
